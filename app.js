@@ -1,6 +1,6 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import {
-  getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, signOut, onAuthStateChanged
+  getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, signOut, onAuthStateChanged
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import {
   getFirestore, collection, doc, onSnapshot, writeBatch, setDoc, updateDoc, deleteDoc, addDoc,
@@ -26,7 +26,7 @@ const provider = new GoogleAuthProvider();
 const state = {
   user: null, isAdmin: false,
   players: new Map(), teams: new Map(), events: new Map(), results: new Map(), admins: [],
-  rsvps: new Map(), lobby: new Map(), suggestions: [], announcement: null, joinreqs: [],
+  rsvps: new Map(), lobby: new Map(), suggestions: [], announcement: null, joinreqs: [], handles: new Map(),
   loaded: { players: false, teams: false, events: false }
 };
 let unsubAdminDoc = null, unsubAdmins = null, unsubLobby = null, unsubReqs = null;
@@ -37,6 +37,16 @@ const myEmail = () => (state.user?.email || "").toLowerCase();
 const isOwner = () => !!state.user && myEmail() === OWNER_EMAIL.toLowerCase();
 const me = () => (state.user ? state.players.get(state.user.uid) : null);
 const myTeam = () => { const p = me(); return p && p.teamId ? state.teams.get(p.teamId) : null; };
+
+// ---------- Nombres únicos ----------
+const cleanName = (s) => String(s || "").trim().replace(/\s+/g, " ");
+const gKey = (g) => "g_" + cleanName(g).toLowerCase();
+const aKey = (a) => "a_" + cleanName(a).toLowerCase();
+const fuzzy = (s) => String(s || "").toLowerCase().normalize("NFD").replace(/[^a-z0-9]/g, "");
+
+// ---------- Navegador dentro de apps (Instagram, Facebook, TikTok…) ----------
+const UA = navigator.userAgent || "";
+const IN_APP = /FBAN|FBAV|FB_IAB|Instagram|Line\/|Snapchat|TikTok|musical_ly|Twitter|LinkedInApp|; wv\)/i.test(UA);
 
 // ---------- Fechas ----------
 const tsMs = (t) => (t?.toMillis ? t.toMillis() : t?.seconds ? t.seconds * 1000 : typeof t === "string" ? Date.parse(t) : 0);
@@ -78,6 +88,8 @@ onSnapshot(collection(db, "rsvps"), (s) => {
   s.docs.forEach((d) => { const r = d.data(); if (!m.has(r.eventId)) m.set(r.eventId, new Map()); m.get(r.eventId).set(r.uid, r.going); });
   state.rsvps = m; render();
 }, onErr("las confirmaciones"));
+onSnapshot(collection(db, "handles"), (s) => { state.handles = new Map(s.docs.map((d) => [d.id, d.data().uid])); state.handlesLoaded = true; render(); }, () => {});
+getRedirectResult(auth).catch((e) => loginError(e));
 onSnapshot(collection(db, "suggestions"), (s) => { state.suggestions = s.docs.map((d) => ({ id: d.id, ...d.data() })); if (!document.activeElement?.closest?.("[data-form=suggest]")) renderSuggestions(); }, onErr("las sugerencias"));
 onSnapshot(doc(db, "settings", "announcement"), (d) => { state.announcement = d.exists() ? d.data() : null; renderAnnouncement(); }, () => {});
 onSnapshot(collection(db, "results"), (s) => { state.results = new Map(s.docs.map((d) => [d.id, { id: d.id, ...d.data() }])); render(); renderResultsSelect(); }, onErr("los resultados"));
@@ -120,8 +132,6 @@ function statsFor(uid) {
   const s = { points: 0, games: 0, kills: 0, wins: 0, podiums: 0, bestKills: 0, history: [] };
   if (!p) return s;
   s.points += POINTS.register;
-  const t = p.teamId && state.teams.get(p.teamId);
-  if (t) { s.points += POINTS.inTeam; if (t.captainUid === uid) s.points += POINTS.captain; }
   for (const r of state.results.values()) {
     const e = r.players?.[uid]; if (!e) continue;
     const ev = state.events.get(r.id);
@@ -131,6 +141,7 @@ function statsFor(uid) {
     pts += kills * POINTS.perKill;
     pts += POINTS.place[e.place] || 0;
     pts += Number(e.bonus) || 0;
+    if (e.captain && e.attended) pts += POINTS.captain;
     s.kills += kills; s.bestKills = Math.max(s.bestKills, kills);
     if (e.place === 1) s.wins++;
     if (e.place >= 1 && e.place <= 3) s.podiums++;
@@ -188,6 +199,8 @@ function cleanStaleReqs() {
 function render() {
   syncLobbySub();
   cleanStaleReqs();
+  backfillHandles();
+  renderDupes();
   $("tab-admin").hidden = !state.isAdmin;
   applyTab();
   renderNext(); renderStats(); renderMe(); renderPointsHelp(); renderMiniRank();
@@ -269,8 +282,19 @@ function renderMe() {
   if (el.contains(document.activeElement) && document.activeElement.matches("input, select, textarea")) return;
   if (!state.user) {
     el.innerHTML = `<h2>Entra para jugar</h2>
-      <p class="muted">Inicia sesión con Google para registrarte, sumar puntos y unirte a un equipo.</p>
-      <button class="btn primary" data-act="login">Entrar con Google</button>`;
+      ${IN_APP ? `<div class="alert" style="margin-bottom:12px"><b>Abre esta página en Chrome o Safari.</b> Estás dentro de otra app (Instagram, Facebook…) y Google no permite iniciar sesión desde ahí. Toca ⋯ y elige <i>Abrir en el navegador</i>, o copia el link.
+        <div class="row" style="margin-top:8px"><button class="btn sm" data-act="copy-link">Copiar link</button></div></div>` : ""}
+      <p class="muted">Inicia sesión con tu cuenta de Google para registrarte, sumar puntos y unirte a un equipo.</p>
+      <button class="btn primary" data-act="login">Entrar con Google</button>
+      <details class="help"><summary class="muted small">¿Problemas para entrar?</summary>
+        <ul class="small muted">
+          <li>Abre el link en <b>Chrome o Safari</b>, no dentro de Instagram/Facebook.</li>
+          <li>Si no pasa nada al tocar el botón, permite las ventanas emergentes para este sitio.</li>
+          <li>En iPhone: Ajustes → Safari → desactiva <i>Bloquear ventanas emergentes</i> mientras entras.</li>
+          <li>Necesitas una cuenta de Google (Gmail). Si no tienes, créala gratis en accounts.google.com.</li>
+        </ul>
+        <button class="btn sm" data-act="copy-link">Copiar link de la página</button>
+      </details>`;
     return;
   }
   if (!state.loaded.players) { el.innerHTML = `<p class="muted">Cargando…</p>`; return; }
@@ -297,7 +321,7 @@ function renderMe() {
     teamBlock = "";
     if (invites.length) teamBlock += `<div class="inbox"><h3>📨 Te invitaron (${invites.length})</h3>${invites.map((r) => reqRow(r, "player")).join("")}</div>`;
     if (requests.length) teamBlock += `<div class="inbox"><h3>⏳ Tus solicitudes</h3>${requests.map((r) => reqRow(r, "player")).join("")}</div>`;
-    teamBlock += `<p class="muted">Estás en el pool. Pide unirte a un equipo en <a href="#equipos">Equipos</a>, espera una invitación o crea tu equipo (+${POINTS.inTeam + POINTS.captain} pts):</p>
+    teamBlock += `<p class="muted">Estás en el pool. Pide unirte a un equipo en <a href="#equipos">Equipos</a>, espera una invitación o crea tu equipo:</p>
       <form class="row" data-form="team">
         <input name="name" placeholder="Nombre del equipo" maxlength="30" minlength="2" required style="flex:1;min-width:180px">
         <button class="btn primary">Crear equipo</button>
@@ -348,8 +372,7 @@ function renderPointsHelp() {
   const pl = POINTS.place;
   $("points-help").innerHTML = [
     [`+${POINTS.register}`, "Registrarte"],
-    [`+${POINTS.inTeam}`, "Estar en un equipo"],
-    [`+${POINTS.captain}`, "Ser capitán"],
+    [`+${POINTS.captain}`, "Ser capitán en una partida"],
     [`+${POINTS.attended}`, "Asistir a una partida"],
     [`+${POINTS.perKill}`, "Por cada kill"],
     [`+${pl[1]} / ${pl[2]} / ${pl[3]}`, "Equipo en 1º / 2º / 3º"]
@@ -376,7 +399,11 @@ function renderRanking() {
 
 function renderTeams() {
   const list = [...state.teams.values()].sort((a, b) => tsMs(a.createdAt) - tsMs(b.createdAt));
-  $("teams-count").textContent = list.length ? `${list.length} registrados` : "";
+  $("teams-count").textContent = list.length ? `${list.length} equipos` : "";
+  const ev = nextEvent();
+  $("teams-for").innerHTML = ev
+    ? `Equipos para <b>${esc(ev.title)}</b> · ${esc(fmt(ev.ms, ADMIN_TZ.id))}. Al terminar la partida, un admin la cierra: se guarda la alineación y todos vuelven al pool para rearmar.${state.isAdmin && ev.id ? ` <button class="btn sm" data-act="ev-close" data-id="${ev.id}">Cerrar partida y liberar equipos</button>` : ""}`
+    : `Los equipos se arman para cada partida.`;
   if (!state.loaded.teams) { $("teams").innerHTML = `<p class="muted">Cargando…</p>`; return; }
   if (!list.length) { $("teams").innerHTML = `<div class="empty-note">Aún no hay equipos. ¡Crea el primero!</div>`; return; }
   const uid = state.user?.uid, admin = state.isAdmin;
@@ -456,6 +483,7 @@ function renderCalendar() {
         ? `<button class="btn sm" data-act="ev-restore" data-id="${e.id}">Reactivar</button>`
         : e.ms > now ? `<button class="btn sm danger" data-act="ev-cancel-event" data-id="${e.id}">Cancelar</button>` : ""}
       <button class="btn sm" data-act="res-open" data-id="${e.id}">Resultados</button>
+      ${e.status !== "cancelled" && state.teams.size ? `<button class="btn sm" data-act="ev-close" data-id="${e.id}">Cerrar y liberar equipos</button>` : ""}
       <button class="btn sm danger" data-act="ev-del" data-id="${e.id}">Borrar</button></div>` : "";
   const card = (e) => {
     const r = state.results.get(e.id);
@@ -513,6 +541,22 @@ function openProfile(uid) {
 }
 
 // ---------- Admin ----------
+function renderDupes() {
+  const box = $("dupes"); if (!box) return;
+  const groups = new Map();
+  const add = (k, p) => { if (!k || k.length < 2) return; if (!groups.has(k)) groups.set(k, new Set()); groups.get(k).add(p.id); };
+  for (const p of state.players.values()) { add("g:" + fuzzy(p.gamertag), p); if (p.activisionId) add("a:" + fuzzy(p.activisionId), p); }
+  const seen = new Set(), out = [];
+  for (const [k, ids] of groups) {
+    if (ids.size < 2) continue;
+    const sig = [...ids].sort().join(","); if (seen.has(sig)) continue; seen.add(sig);
+    out.push({ why: k.startsWith("a:") ? "mismo Activision ID" : "gamertag parecido", ids: [...ids] });
+  }
+  box.innerHTML = out.length ? out.map((g) => `<div class="dupe"><p class="small muted">${g.why}</p>${g.ids.map((id) => {
+      const p = state.players.get(id);
+      return `<div class="slot">${playerLine(p, "")}<span class="btns"><small class="muted">${p.createdAt ? esc(fmt(tsMs(p.createdAt), ADMIN_TZ.id)) : ""}</small>${!p.teamId && id !== state.user?.uid ? `<button class="btn sm danger" data-act="admin-del-player" data-uid="${id}">Borrar</button>` : ""}</span></div>`;
+    }).join("")}</div>`).join("") : `<p class="muted small">No se detectan registros duplicados.</p>`;
+}
 function renderAdmins() {
   $("admins-panel").hidden = !isOwner();
   if (!isOwner()) return;
@@ -581,12 +625,30 @@ async function run(fn, okMsg) {
   }
 }
 
+function loginError(e) {
+  if (!e || ["auth/popup-closed-by-user", "auth/cancelled-popup-request"].includes(e.code)) return;
+  const msgs = {
+    "auth/popup-blocked": "Tu navegador bloqueó la ventana de Google. Permite ventanas emergentes y vuelve a tocar el botón.",
+    "auth/unauthorized-domain": "Este dominio no está autorizado en Firebase. Avísale al organizador.",
+    "auth/network-request-failed": "Sin conexión. Revisa tu internet e intenta de nuevo.",
+    "auth/web-storage-unsupported": "Tu navegador bloquea el almacenamiento. Desactiva el modo privado o abre en Chrome/Safari.",
+    "auth/internal-error": "Error de Google. Abre la página en Chrome o Safari e intenta de nuevo."
+  };
+  toast(msgs[e.code] || `No se pudo iniciar sesión (${e.code || e.message}). Prueba en Chrome o Safari.`, true);
+}
 async function login() {
+  provider.setCustomParameters({ prompt: "select_account" });
   try { await signInWithPopup(auth, provider); }
   catch (e) {
-    if (["auth/popup-blocked", "auth/operation-not-supported-in-this-environment", "auth/cancelled-popup-request"].includes(e.code)) await signInWithRedirect(auth, provider);
-    else if (e.code !== "auth/popup-closed-by-user") toast("No se pudo iniciar sesión: " + e.message, true);
+    if (e.code === "auth/operation-not-supported-in-this-environment") {
+      try { await signInWithRedirect(auth, provider); } catch (e2) { loginError(e2); }
+    } else loginError(e);
   }
+}
+async function copyLink() {
+  const url = location.origin + location.pathname;
+  try { await navigator.clipboard.writeText(url); toast("Link copiado. Pégalo en Chrome o Safari."); }
+  catch { prompt("Copia este link y ábrelo en Chrome o Safari:", url); }
 }
 
 function saveProfile(form) {
@@ -599,10 +661,30 @@ function saveProfile(form) {
     trackerUrl: String(f.get("trackerUrl") || "").trim().slice(0, 200)
   };
   if (data.trackerUrl && !/^https:\/\//.test(data.trackerUrl)) return toast("El link del tracker debe empezar con https://", true);
+  data.gamertag = cleanName(data.gamertag); data.activisionId = cleanName(data.activisionId);
   if (data.gamertag.length < 2) return toast("El gamertag debe tener al menos 2 caracteres", true);
-  const uid = state.user.uid;
-  if (me()) return run(() => updateDoc(playerRef(uid), { ...data, updatedAt: serverTimestamp() }), "Perfil actualizado");
-  return run(() => setDoc(playerRef(uid), { ...data, teamId: null, createdAt: serverTimestamp() }), `¡Registrado! +${POINTS.register} puntos`);
+  if (/[\/]/.test(data.gamertag + data.activisionId)) return toast("No uses el carácter / en el gamertag ni en el Activision ID", true);
+  if (data.gamertag === "." || data.gamertag === "..") return toast("Gamertag no válido", true);
+  const uid = state.user.uid, cur = me();
+  const gk = gKey(data.gamertag), ak = data.activisionId ? aKey(data.activisionId) : null;
+  const gOwner = state.handles.get(gk), aOwner = ak && state.handles.get(ak);
+  if (gOwner && gOwner !== uid) return toast(`El gamertag "${data.gamertag}" ya está registrado. Si es tuyo, avísale a un admin.`, true);
+  if (aOwner && aOwner !== uid) return toast(`Ese Activision ID ya está registrado por otro jugador. Si es tuyo, avísale a un admin.`, true);
+  if (!cur) {
+    const similar = [...state.players.values()].find((p) => fuzzy(p.gamertag) === fuzzy(data.gamertag) || (data.activisionId && fuzzy(p.activisionId) === fuzzy(data.activisionId)));
+    if (similar && !confirm(`Ya existe un jugador parecido: "${similar.gamertag}". ¿Seguro que no eres tú con otra cuenta de Google?`)) return;
+  }
+  const b = writeBatch(db);
+  if (!gOwner) b.set(doc(db, "handles", gk), { uid });
+  if (ak && !aOwner) b.set(doc(db, "handles", ak), { uid });
+  if (cur) {
+    if (gKey(cur.gamertag) !== gk && state.handles.get(gKey(cur.gamertag)) === uid) b.delete(doc(db, "handles", gKey(cur.gamertag)));
+    if (cur.activisionId && aKey(cur.activisionId) !== ak && state.handles.get(aKey(cur.activisionId)) === uid) b.delete(doc(db, "handles", aKey(cur.activisionId)));
+    b.update(playerRef(uid), { ...data, updatedAt: serverTimestamp() });
+    return run(() => b.commit(), "Perfil actualizado");
+  }
+  b.set(playerRef(uid), { ...data, teamId: null, createdAt: serverTimestamp() });
+  return run(() => b.commit(), `¡Registrado! +${POINTS.register} puntos`);
 }
 
 function createTeam(form) {
@@ -610,7 +692,8 @@ function createTeam(form) {
   if (name.length < 2) return toast("Nombre muy corto", true);
   if ([...state.teams.values()].some((t) => t.name.toLowerCase() === name.toLowerCase())) return toast("Ya existe un equipo con ese nombre", true);
   const uid = state.user.uid, ref = doc(collection(db, "teams")), b = writeBatch(db);
-  b.set(ref, { name, captainUid: uid, members: [uid], createdAt: serverTimestamp() });
+  const ev = nextEvent();
+  b.set(ref, { name, captainUid: uid, members: [uid], createdAt: serverTimestamp(), ...(ev?.id ? { eventId: ev.id } : {}) });
   b.update(playerRef(uid), { teamId: ref.id });
   return run(() => b.commit(), `Equipo "${name}" creado`);
 }
@@ -654,14 +737,34 @@ function makeCaptain(tid, uid) {
   return run(() => updateDoc(teamRef(tid), { captainUid: uid }), "Capitanía cedida");
 }
 
+function ownHandles(uid) { return [...state.handles].filter(([, u]) => u === uid).map(([k]) => k); }
+
+// Jugadores registrados antes de los nombres únicos: reservar su gamertag/ID si están libres.
+let backfilling = false;
+function backfillHandles() {
+  const p = me(); if (!p || backfilling || !state.handlesLoaded) return;
+  const want = [gKey(p.gamertag), p.activisionId ? aKey(p.activisionId) : null].filter((k) => k && !state.handles.has(k));
+  if (!want.length) return;
+  backfilling = true;
+  const b = writeBatch(db);
+  want.forEach((k) => b.set(doc(db, "handles", k), { uid: p.id }));
+  b.commit().catch(() => {}).finally(() => { backfilling = false; });
+}
+
 function deleteMe() {
   if (!confirm("¿Borrar tu registro?")) return;
-  return run(() => deleteDoc(playerRef(state.user.uid)), "Registro borrado");
+  const b = writeBatch(db);
+  ownHandles(state.user.uid).forEach((k) => b.delete(doc(db, "handles", k)));
+  b.delete(playerRef(state.user.uid));
+  return run(() => b.commit(), "Registro borrado");
 }
 
 function adminDeletePlayer(uid) {
   if (!confirm(`¿Borrar a ${state.players.get(uid)?.gamertag || "este jugador"}?`)) return;
-  return run(() => deleteDoc(playerRef(uid)), "Jugador borrado");
+  const b = writeBatch(db);
+  ownHandles(uid).forEach((k) => b.delete(doc(db, "handles", k)));
+  b.delete(playerRef(uid));
+  return run(() => b.commit(), "Jugador borrado");
 }
 
 async function saveEvent(form) {
@@ -722,6 +825,7 @@ function saveResults(form) {
     fs.querySelectorAll(".res-player").forEach((row) => {
       out.players[row.dataset.uid] = {
         teamId: tid, teamName: name, place,
+        captain: !!(state.results.get(eventId)?.players?.[row.dataset.uid]?.captain ?? (state.teams.get(tid)?.captainUid === row.dataset.uid)),
         attended: row.querySelector("[name=attended]").checked,
         kills: Math.max(0, parseInt(row.querySelector("[name=kills]").value, 10) || 0),
         bonus: parseInt(row.querySelector("[name=bonus]").value, 10) || 0
@@ -909,6 +1013,40 @@ async function autoBuild() {
   if (made) toast(`${made} equipo${made === 1 ? "" : "s"} creado${made === 1 ? "" : "s"}`);
 }
 
+// ---------- Cerrar partida: guardar alineación y liberar equipos ----------
+async function closeEvent(eventId) {
+  const e = state.events.get(eventId); if (!e) return;
+  const teams = [...state.teams.values()];
+  if (!teams.length) return toast("No hay equipos que liberar", true);
+  const hasRes = state.results.has(eventId);
+  if (!confirm(`Cerrar "${e.title}":\n\n• ${hasRes ? "Ya tiene resultados; se agregan los equipos que falten." : "Se guarda la alineación de los " + teams.length + " equipos en sus resultados (luego cargas kills y posiciones)."}\n• Se disuelven todos los equipos y los jugadores vuelven al pool.\n\n¿Continuar?`)) return;
+  const r = state.results.get(eventId) || { teams: {}, players: {} };
+  const rs = state.rsvps.get(eventId);
+  const out = { teams: { ...(r.teams || {}) }, players: { ...(r.players || {}) }, updatedAt: serverTimestamp(), updatedBy: myEmail() };
+  for (const t of teams) {
+    if (out.teams[t.id]) continue;
+    out.teams[t.id] = { name: t.name, place: null };
+    for (const uid of t.members || []) {
+      if (out.players[uid]) continue;
+      out.players[uid] = { teamId: t.id, teamName: t.name, place: null, captain: uid === t.captainUid,
+        attended: rs?.size ? rs.get(uid) === true : true, kills: 0, bonus: 0 };
+    }
+  }
+  if (!(await run(() => setDoc(doc(db, "results", eventId), out)))) return;
+  for (const t of teams) {
+    const b = writeBatch(db);
+    for (const m of t.members || []) if (state.players.has(m)) b.update(playerRef(m), { teamId: null });
+    b.delete(teamRef(t.id));
+    if (!(await run(() => b.commit()))) return;
+  }
+  const reqs = state.joinreqs;
+  for (let i = 0; i < reqs.length; i += 400) {
+    const b = writeBatch(db); reqs.slice(i, i + 400).forEach((x) => b.delete(doc(db, "joinreqs", x.id))); await run(() => b.commit());
+  }
+  toast("Partida cerrada. Alineación guardada y equipos liberados.");
+  openResults(eventId);
+}
+
 function setRsvp(eventId, going) {
   const uid = state.user.uid;
   const cur = state.rsvps.get(eventId)?.get(uid);
@@ -946,6 +1084,7 @@ document.addEventListener("click", (e) => {
     "ann-clear": clearAnnouncement,
     "req-send": () => sendRequest(team), "req-invite": () => sendInvite(uid), "req-delete": () => deleteReq(id), "req-accept": () => acceptReq(id),
     "admin-assign": () => adminAssign(uid), "auto-build": autoBuild,
+    "copy-link": copyLink, "ev-close": () => closeEvent(id),
     vote: () => vote(id), "sugg-del": () => deleteSuggestion(id), "sugg-schedule": () => scheduleSuggestion(id)
   })[act]?.();
 });

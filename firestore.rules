@@ -18,12 +18,16 @@ service cloud.firestore {
     }
 
     function playerPath(uid) { return /databases/$(database)/documents/players/$(uid); }
+    function handlePath(key) { return /databases/$(database)/documents/handles/$(key); }
+    function ownsHandle(key, uid) { return getAfter(handlePath(key)).data.uid == uid; }
     function reqPath(tid, uid) { return /databases/$(database)/documents/joinreqs/$(tid + '_' + uid); }
     function teamPath(tid)   { return /databases/$(database)/documents/teams/$(tid); }
 
     function validProfile(d) {
       return d.gamertag is string && d.gamertag.size() >= 2 && d.gamertag.size() <= 24
+        && !d.gamertag.matches('.*/.*') && d.gamertag != '..'
         && d.activisionId is string && d.activisionId.size() <= 40
+        && !d.activisionId.matches('.*/.*')
         && d.platform in ['PC', 'PlayStation', 'Xbox']
         && d.mic is bool
         && (!('trackerUrl' in d) || (d.trackerUrl is string && d.trackerUrl.size() <= 200
@@ -45,7 +49,11 @@ service cloud.firestore {
       allow create: if request.auth != null && request.auth.uid == uid
         && request.resource.data.keys().hasOnly(['gamertag', 'activisionId', 'platform', 'mic', 'trackerUrl', 'teamId', 'createdAt', 'updatedAt'])
         && request.resource.data.teamId == null
-        && validProfile(request.resource.data);
+        && validProfile(request.resource.data)
+        // Gamertag y Activision ID únicos: hay que reservarlos en /handles en el mismo batch.
+        && ownsHandle('g_' + request.resource.data.gamertag.lower(), uid)
+        && (request.resource.data.activisionId == ''
+            || ownsHandle('a_' + request.resource.data.activisionId.lower(), uid));
 
       allow update: if isOwner()
         || profileEdit(uid)
@@ -59,7 +67,12 @@ service cloud.firestore {
         return request.auth != null && request.auth.uid == uid
           && request.resource.data.diff(resource.data).affectedKeys()
                .hasOnly(['gamertag', 'activisionId', 'platform', 'mic', 'trackerUrl', 'updatedAt'])
-          && validProfile(request.resource.data);
+          && validProfile(request.resource.data)
+          && (request.resource.data.gamertag.lower() == resource.data.gamertag.lower()
+              || ownsHandle('g_' + request.resource.data.gamertag.lower(), uid))
+          && (request.resource.data.activisionId == ''
+              || request.resource.data.activisionId.lower() == resource.data.activisionId.lower()
+              || ownsHandle('a_' + request.resource.data.activisionId.lower(), uid));
       }
 
       function teamIdOnly() {
@@ -94,7 +107,7 @@ service cloud.firestore {
       allow read: if true;
 
       allow create: if isOwner() || (request.auth != null
-        && request.resource.data.keys().hasOnly(['name', 'captainUid', 'members', 'createdAt'])
+        && request.resource.data.keys().hasOnly(['name', 'captainUid', 'members', 'createdAt', 'eventId'])
         && request.resource.data.captainUid == request.auth.uid
         && request.resource.data.members == [request.auth.uid]
         && validName(request.resource.data.name)
@@ -164,6 +177,18 @@ service cloud.firestore {
         let m = resource.data.members;
         return m.size() <= i || !existsAfter(playerPath(m[i])) || getAfter(playerPath(m[i])).data.teamId == null;
       }
+    }
+
+    // ---------- NOMBRES ÚNICOS (id = 'g_' + gamertag o 'a_' + Activision ID, en minúsculas) ----------
+    match /handles/{key} {
+      allow read: if true;
+      // Solo puedes reservar tu propio gamertag / Activision ID (el que queda en tu perfil).
+      allow create: if request.auth != null
+        && request.resource.data.keys().hasOnly(['uid'])
+        && request.resource.data.uid == request.auth.uid
+        && (key == 'g_' + getAfter(playerPath(request.auth.uid)).data.gamertag.lower()
+            || key == 'a_' + getAfter(playerPath(request.auth.uid)).data.activisionId.lower());
+      allow delete: if (request.auth != null && resource.data.uid == request.auth.uid) || isAdmin();
     }
 
     // ---------- ADMINS (id del documento = correo en minúsculas) ----------

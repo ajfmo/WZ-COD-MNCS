@@ -36,8 +36,7 @@ export const PLATFORMS = ["PC", "PlayStation", "Xbox"];
 // Puntos
 export const POINTS = {
   register: 10,     // por registrarse
-  inTeam: 5,        // por estar en un equipo
-  captain: 5,       // extra por ser capitán
+  captain: 5,       // por ser capitán en una partida (se guarda al cerrar la partida)
   attended: 10,     // por asistir a una partida
   perKill: 2,       // por cada kill
   place: { 1: 50, 2: 30, 3: 20 } // por posición del equipo en la partida

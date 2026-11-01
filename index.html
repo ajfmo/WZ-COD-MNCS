@@ -48,6 +48,7 @@
 
     <section data-view="equipos" hidden>
       <div class="sec-head"><h2>Equipos</h2><span class="muted" id="teams-count"></span></div>
+      <p class="small muted" id="teams-for"></p>
       <div id="teams" class="teams"></div>
       <div class="sec-head" style="margin-top:28px"><h2>Pool de agentes libres</h2><span class="muted" id="pool-count"></span></div>
       <p class="muted small">Jugadores sin equipo. Los capitanes con plazas libres pueden invitarlos.</p>
@@ -112,6 +113,12 @@
         <p class="muted small">Marca asistencia, kills y la posición de cada equipo. Los puntos se calculan solos.</p>
         <div class="row"><select id="res-event" style="flex:1;min-width:220px"></select></div>
         <div id="res-form"></div>
+      </div>
+
+      <div class="panel" style="margin-top:20px">
+        <h2>Posibles duplicados</h2>
+        <p class="muted small">Jugadores con gamertag o Activision ID muy parecidos. Revisa y borra el que sobre (solo si no está en un equipo).</p>
+        <div id="dupes" class="dupes"></div>
       </div>
 
       <div class="panel" style="margin-top:20px" id="admins-panel" hidden>
