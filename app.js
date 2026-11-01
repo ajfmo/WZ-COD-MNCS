@@ -50,7 +50,8 @@ function fmtTime(ms, tz) {
 function whenLine(ms) {
   const ve = `${fmt(ms, ADMIN_TZ.id)} (${ADMIN_TZ.label})`;
   if (localTz === ADMIN_TZ.id) return ve;
-  return `${ve} · ${fmtTime(ms, localTz)} tu hora`;
+  const sameDay = new Intl.DateTimeFormat("en-CA", { timeZone: localTz }).format(ms) === new Intl.DateTimeFormat("en-CA", { timeZone: ADMIN_TZ.id }).format(ms);
+  return `${ve} · ${sameDay ? fmtTime(ms, localTz) : fmt(ms, localTz)} tu hora`;
 }
 // datetime-local (en hora de admin) <-> ms
 function adminInputToMs(v) {
@@ -77,9 +78,9 @@ onSnapshot(collection(db, "rsvps"), (s) => {
   s.docs.forEach((d) => { const r = d.data(); if (!m.has(r.eventId)) m.set(r.eventId, new Map()); m.get(r.eventId).set(r.uid, r.going); });
   state.rsvps = m; render();
 }, onErr("las confirmaciones"));
-onSnapshot(collection(db, "suggestions"), (s) => { state.suggestions = s.docs.map((d) => ({ id: d.id, ...d.data() })); renderSuggestions(); }, onErr("las sugerencias"));
+onSnapshot(collection(db, "suggestions"), (s) => { state.suggestions = s.docs.map((d) => ({ id: d.id, ...d.data() })); if (!document.activeElement?.closest?.("[data-form=suggest]")) renderSuggestions(); }, onErr("las sugerencias"));
 onSnapshot(doc(db, "settings", "announcement"), (d) => { state.announcement = d.exists() ? d.data() : null; renderAnnouncement(); }, () => {});
-onSnapshot(collection(db, "results"), (s) => { state.results = new Map(s.docs.map((d) => [d.id, { id: d.id, ...d.data() }])); render(); }, onErr("los resultados"));
+onSnapshot(collection(db, "results"), (s) => { state.results = new Map(s.docs.map((d) => [d.id, { id: d.id, ...d.data() }])); render(); renderResultsSelect(); }, onErr("los resultados"));
 
 onAuthStateChanged(auth, (u) => {
   state.user = u;
@@ -102,7 +103,8 @@ setInterval(renderNext, 30e3);
 
 // ---------- Tabs ----------
 function currentTab() {
-  const t = location.hash.slice(1) || "inicio";
+  const t = location.hash.slice(1);
+  if (!["inicio", "equipos", "calendario", "ranking", "admin"].includes(t)) return "inicio";
   return t === "admin" && !state.isAdmin ? "inicio" : t;
 }
 function applyTab() {
@@ -167,12 +169,25 @@ function syncLobbySub() {
   if (allowed && !unsubLobby) {
     unsubLobby = onSnapshot(collection(db, "lobby"),
       (s) => { state.lobby = new Map(s.docs.map((d) => [d.id, d.data()])); renderNext(); renderCalendar(); },
-      () => { state.lobby = new Map(); });
+      () => { unsubLobby = null; state.lobby = new Map(); });
   } else if (!allowed && unsubLobby) { unsubLobby(); unsubLobby = null; state.lobby = new Map(); }
+}
+
+let cleaning = false;
+function cleanStaleReqs() {
+  const p = me();
+  if (!p || !p.teamId || cleaning) return;
+  const mine = state.joinreqs.filter((r) => r.uid === p.id);
+  if (!mine.length) return;
+  cleaning = true;
+  const b = writeBatch(db);
+  mine.forEach((r) => b.delete(doc(db, "joinreqs", r.id)));
+  b.commit().catch(() => {}).finally(() => { cleaning = false; });
 }
 
 function render() {
   syncLobbySub();
+  cleanStaleReqs();
   $("tab-admin").hidden = !state.isAdmin;
   applyTab();
   renderNext(); renderStats(); renderMe(); renderPointsHelp(); renderMiniRank();
@@ -185,7 +200,8 @@ function nextEvent() {
   const list = [...state.events.values()].map((e) => ({ ...e, ms: tsMs(e.startsAt) }))
     .filter((e) => e.ms > now - 3 * 3600e3 && e.status !== "cancelled").sort((a, b) => a.ms - b.ms);
   if (list.length) return list[0];
-  if (state.loaded.events && !state.events.size) return { ...FALLBACK_EVENT, ms: tsMs(FALLBACK_EVENT.startsAt) };
+  const fb = tsMs(FALLBACK_EVENT.startsAt);
+  if (state.loaded.events && !state.events.size && fb > now - 3 * 3600e3) return { ...FALLBACK_EVENT, ms: fb };
   return null;
 }
 function shareLink(e) {
@@ -250,6 +266,7 @@ function playerLine(p, extra = "") {
 
 function renderMe() {
   const el = $("me");
+  if (el.contains(document.activeElement) && document.activeElement.matches("input, select, textarea")) return;
   if (!state.user) {
     el.innerHTML = `<h2>Entra para jugar</h2>
       <p class="muted">Inicia sesión con Google para registrarte, sumar puntos y unirte a un equipo.</p>
@@ -519,11 +536,13 @@ function renderResultsForm(eventId) {
   if (!eventId) { box.innerHTML = ""; return; }
   const r = state.results.get(eventId) || { teams: {}, players: {} };
   const rs = state.rsvps.get(eventId);
-  const teams = [...state.teams.values()];
-  // equipos guardados que ya no existen
-  for (const [tid, t] of Object.entries(r.teams || {})) if (!state.teams.has(tid)) {
-    teams.push({ id: tid, name: t.name + " (disuelto)", members: Object.entries(r.players || {}).filter(([, v]) => v.teamId === tid).map(([u]) => u) });
+  // Si ya hay resultados, se respeta la composición guardada; equipos nuevos se agregan al final.
+  const savedMembers = (tid) => Object.entries(r.players || {}).filter(([, v]) => v.teamId === tid).map(([u]) => u);
+  const teams = [];
+  for (const [tid, t] of Object.entries(r.teams || {})) {
+    teams.push({ id: tid, name: state.teams.has(tid) ? t.name : t.name + " (disuelto)", members: savedMembers(tid) });
   }
+  for (const t of state.teams.values()) if (!r.teams?.[t.id]) teams.push(t);
   if (!teams.length) { box.innerHTML = `<p class="muted">No hay equipos registrados.</p>`; return; }
   box.innerHTML = `${!state.results.has(eventId) && rs?.size ? `<p class="muted small">Asistencia precargada según quién confirmó "Voy".</p>` : ""}<form data-form="results" data-event="${eventId}">
     ${teams.map((t) => {
@@ -594,15 +613,6 @@ function createTeam(form) {
   b.set(ref, { name, captainUid: uid, members: [uid], createdAt: serverTimestamp() });
   b.update(playerRef(uid), { teamId: ref.id });
   return run(() => b.commit(), `Equipo "${name}" creado`);
-}
-
-function addToTeam(uid) {
-  const t = myTeam();
-  if (!t || (t.members || []).length >= TEAM_SIZE) return toast("Tu equipo ya está completo", true);
-  const b = writeBatch(db);
-  b.update(teamRef(t.id), { members: arrayUnion(uid) });
-  b.update(playerRef(uid), { teamId: t.id });
-  return run(() => b.commit(), `${state.players.get(uid)?.gamertag || "Jugador"} agregado`);
 }
 
 function removeFromTeam(tid, uid) {
@@ -757,7 +767,7 @@ function renderAnnouncement() {
   else el.hidden = true;
   const f = $("ann-form");
   if (f && document.activeElement?.form !== f) {
-    f.elements.text.value = a?.text || ""; f.elements.kind.value = a?.kind || "info"; f.elements.active.checked = !!a?.active;
+    f.elements.text.value = a?.text || ""; f.elements.kind.value = a?.kind || "info"; f.elements.active.checked = a?.text ? !!a.active : true;
   }
 }
 function saveAnnouncement(form) {
@@ -877,11 +887,11 @@ async function autoBuild() {
   const mode = prompt(`Armar equipos con ${pool.length} jugadores del pool.\n1 = al azar\n2 = equilibrados por puntos`, "2");
   if (mode !== "1" && mode !== "2") return;
   let list = pool.map((p) => ({ p, pts: statsFor(p.id).points }));
-  if (mode === "1") list.sort(() => Math.random() - 0.5);
+  if (mode === "1") for (let i = list.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [list[i], list[j]] = [list[j], list[i]]; }
   else list.sort((a, b) => b.pts - a.pts);
-  const n = Math.ceil(list.length / TEAM_SIZE);
+  const n = Math.ceil(list.length / TEAM_SIZE); // reparto parejo: tamaños difieren en máximo 1, nunca hay equipos de 1
   const groups = Array.from({ length: n }, () => []);
-  if (mode === "1") list.forEach((x, i) => groups[Math.floor(i / TEAM_SIZE)].push(x));
+  if (mode === "1") list.forEach((x, i) => groups[i % n].push(x));
   else list.forEach((x, i) => { const round = Math.floor(i / n), pos = i % n; groups[round % 2 ? n - 1 - pos : pos].push(x); }); // draft en serpiente
   const preview = groups.map((g, i) => `Escuadra ${i + 1}: ${g.map((x) => x.p.gamertag).join(", ")}`).join("\n");
   if (!confirm(`Se crearán ${n} equipos (el primero de cada lista es capitán):\n\n${preview}`)) return;
@@ -923,7 +933,7 @@ document.addEventListener("click", (e) => {
   const { act, team, uid, id, email } = b.dataset;
   ({
     login, logout: () => signOut(auth),
-    add: () => addToTeam(uid), kick: () => removeFromTeam(team, uid),
+    kick: () => removeFromTeam(team, uid),
     leave: () => leaveTeam(team), disband: () => disband(team), rename: () => rename(team),
     "make-cap": () => makeCaptain(team, uid), "delete-me": deleteMe,
     "admin-del-player": () => adminDeletePlayer(uid),

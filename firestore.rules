@@ -6,12 +6,14 @@ service cloud.firestore {
 
     // Dueño: único que nombra o quita admins. Cámbialo aquí y en config.js (OWNER_EMAIL).
     function isOwner() {
-      return request.auth != null && request.auth.token.email == 'aflores@sforce.tech';
+      return request.auth != null && request.auth.token.email_verified == true
+        && request.auth.token.email == 'aflores@sforce.tech';
     }
 
     function isAdmin() {
       return isOwner()
         || (request.auth != null && request.auth.token.email is string
+            && request.auth.token.email_verified == true
             && exists(/databases/$(database)/documents/admins/$(request.auth.token.email.lower())));
     }
 
@@ -50,8 +52,8 @@ service cloud.firestore {
         || (teamIdOnly() && (joining(uid) || leaving(uid)))
         || isAdmin();
 
-      allow delete: if (request.auth != null && request.auth.uid == uid && resource.data.teamId == null)
-        || isAdmin();
+      allow delete: if resource.data.teamId == null
+        && ((request.auth != null && request.auth.uid == uid) || isAdmin());
 
       function profileEdit(uid) {
         return request.auth != null && request.auth.uid == uid
@@ -65,8 +67,6 @@ service cloud.firestore {
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['teamId']);
       }
 
-      // Un jugador libre entra a un equipo: lo hace el capitán de ese equipo
-      // (o el propio jugador al crear su equipo, porque queda como capitán).
       // Un jugador libre entra a un equipo: lo agrega el capitán (también al crear su
       // propio equipo o al aceptar una solicitud) o el propio jugador acepta una invitación.
       function joining(uid) {
@@ -74,7 +74,8 @@ service cloud.firestore {
         return resource.data.teamId == null
           && t is string
           && uid in getAfter(teamPath(t)).data.members
-          && (getAfter(teamPath(t)).data.captainUid == request.auth.uid
+          && ((getAfter(teamPath(t)).data.captainUid == request.auth.uid
+                && (uid == request.auth.uid || get(reqPath(t, uid)).data.type == 'request'))
               || (request.auth.uid == uid && get(reqPath(t, uid)).data.type == 'invite'));
       }
 
@@ -128,8 +129,10 @@ service cloud.firestore {
           && added.size() + removed.size() <= 1
           && (added.size() == 0
               || (get(playerPath(added[0])).data.teamId == null
-                  && getAfter(playerPath(added[0])).data.teamId == tid))
+                  && getAfter(playerPath(added[0])).data.teamId == tid
+                  && get(reqPath(tid, added[0])).data.type == 'request'))
           && (removed.size() == 0
+              || !existsAfter(playerPath(removed[0]))
               || getAfter(playerPath(removed[0])).data.teamId == null);
       }
 
@@ -159,7 +162,7 @@ service cloud.firestore {
       // Para disolver el equipo, todos sus miembros deben quedar libres en la misma operación.
       function freed(i) {
         let m = resource.data.members;
-        return m.size() <= i || getAfter(playerPath(m[i])).data.teamId == null;
+        return m.size() <= i || !existsAfter(playerPath(m[i])) || getAfter(playerPath(m[i])).data.teamId == null;
       }
     }
 
