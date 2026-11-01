@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Warzone · Equipos</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="hero">
+    <div class="wrap">
+      <p class="kicker">Lobby privado</p>
+      <h1 id="ev-title">Warzone</h1>
+      <p class="when"><span id="ev-date"></span> · <span id="ev-time"></span></p>
+      <p class="notes" id="ev-notes"></p>
+      <div class="stats" id="stats"></div>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section id="me" class="panel" aria-live="polite"></section>
+
+    <section>
+      <div class="sec-head">
+        <h2>Equipos</h2>
+        <span class="muted" id="teams-count"></span>
+      </div>
+      <div id="teams" class="teams"></div>
+    </section>
+
+    <section>
+      <div class="sec-head">
+        <h2>Pool de agentes libres</h2>
+        <span class="muted" id="pool-count"></span>
+      </div>
+      <p class="muted small">Jugadores registrados sin equipo. Los capitanes con plazas libres pueden agregarlos.</p>
+      <div id="pool" class="pool"></div>
+    </section>
+  </main>
+
+  <footer class="wrap muted small">Datos en vivo · se actualiza solo</footer>
+
+  <div id="toast" class="toast" role="status"></div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
