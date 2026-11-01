@@ -180,6 +180,32 @@ service cloud.firestore {
       allow delete: if (request.auth != null && resource.data.uid == request.auth.uid) || isAdmin();
     }
 
+    // ---------- ANUNCIO Y AJUSTES ----------
+    match /settings/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // ---------- SUGERENCIAS DE HORARIO ----------
+    match /suggestions/{id} {
+      allow read: if true;
+      allow create: if isPlayer()
+        && request.resource.data.keys().hasOnly(['uid', 'startsAt', 'note', 'votes', 'createdAt'])
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.startsAt is timestamp
+        && request.resource.data.note is string && request.resource.data.note.size() <= 100
+        && request.resource.data.votes == [request.auth.uid];
+      // Votar: cada quien solo agrega o quita su propio voto.
+      allow update: if (isPlayer()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['votes'])
+          && (request.resource.data.votes == resource.data.votes.concat([request.auth.uid])
+              && !(request.auth.uid in resource.data.votes)
+            || request.resource.data.votes == resource.data.votes.removeAll([request.auth.uid])
+              && request.auth.uid in resource.data.votes))
+        || isAdmin();
+      allow delete: if (request.auth != null && resource.data.uid == request.auth.uid) || isAdmin();
+    }
+
     // ---------- RESULTADOS POR PARTIDA (id = id del evento) ----------
     match /results/{eventId} {
       allow read: if true;

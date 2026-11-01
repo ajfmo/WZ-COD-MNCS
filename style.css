@@ -175,3 +175,15 @@ label.inline input { width: 72px; min-height: 36px; padding: 6px 8px; }
 .lobby { background: var(--surface-2); border: 1px dashed var(--accent); border-radius: 8px; padding: 8px 12px; font-size: 14px; }
 .btn.wa { display: inline-flex; align-items: center; text-decoration: none; color: var(--text); border-color: #2b6b3f; background: #12301c; }
 .btn.wa:hover { border-color: #3fa35f; }
+
+/* ---------- v4: anuncio, cancelaciones, sugerencias ---------- */
+.announce { padding: 12px 0; font-weight: 600; border-bottom: 1px solid var(--line); }
+.announce.info { background: #14222e; color: #bfe0ff; }
+.announce.warning { background: #3a1512; color: #ffc9c2; }
+.announce.success { background: #14301c; color: #c4f0cf; }
+.event.cancelled { opacity: .75; border-style: dashed; }
+.event.cancelled h3 { text-decoration: line-through; text-decoration-thickness: 1px; }
+.event.cancelled h3 .tag { text-decoration: none; }
+.tag.danger-tag { color: var(--danger); border: 1px solid var(--danger); background: transparent; }
+.sugg-list { display: grid; gap: 8px; margin-top: 10px; }
+.sugg { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 10px 12px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }

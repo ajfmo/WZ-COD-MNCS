@@ -26,7 +26,7 @@ const provider = new GoogleAuthProvider();
 const state = {
   user: null, isAdmin: false,
   players: new Map(), teams: new Map(), events: new Map(), results: new Map(), admins: [],
-  rsvps: new Map(), lobby: new Map(),
+  rsvps: new Map(), lobby: new Map(), suggestions: [], announcement: null,
   loaded: { players: false, teams: false, events: false }
 };
 let unsubAdminDoc = null, unsubAdmins = null, unsubLobby = null;
@@ -77,6 +77,8 @@ onSnapshot(collection(db, "rsvps"), (s) => {
   s.docs.forEach((d) => { const r = d.data(); if (!m.has(r.eventId)) m.set(r.eventId, new Map()); m.get(r.eventId).set(r.uid, r.going); });
   state.rsvps = m; render();
 }, onErr("las confirmaciones"));
+onSnapshot(collection(db, "suggestions"), (s) => { state.suggestions = s.docs.map((d) => ({ id: d.id, ...d.data() })); renderSuggestions(); }, onErr("las sugerencias"));
+onSnapshot(doc(db, "settings", "announcement"), (d) => { state.announcement = d.exists() ? d.data() : null; renderAnnouncement(); }, () => {});
 onSnapshot(collection(db, "results"), (s) => { state.results = new Map(s.docs.map((d) => [d.id, { id: d.id, ...d.data() }])); render(); }, onErr("los resultados"));
 
 onAuthStateChanged(auth, (u) => {
@@ -163,12 +165,13 @@ function render() {
   applyTab();
   renderNext(); renderStats(); renderMe(); renderPointsHelp(); renderMiniRank();
   renderTeams(); renderPool(); renderCalendar(); renderRanking();
+  if (!document.activeElement?.closest?.("[data-form=suggest]")) renderSuggestions();
 }
 
 function nextEvent() {
   const now = Date.now();
   const list = [...state.events.values()].map((e) => ({ ...e, ms: tsMs(e.startsAt) }))
-    .filter((e) => e.ms > now - 3 * 3600e3).sort((a, b) => a.ms - b.ms);
+    .filter((e) => e.ms > now - 3 * 3600e3 && e.status !== "cancelled").sort((a, b) => a.ms - b.ms);
   if (list.length) return list[0];
   if (state.loaded.events && !state.events.size) return { ...FALLBACK_EVENT, ms: tsMs(FALLBACK_EVENT.startsAt) };
   return null;
@@ -210,7 +213,10 @@ function renderNext() {
     <p class="when">${esc(whenLine(e.ms))}</p>
     <p class="count">${esc(countdown(e.ms))}</p>
     ${e.notes ? `<p class="notes">${esc(e.notes)}</p>` : ""}
-    <div class="next-extras">${eventExtras(e)}</div>`;
+    <div class="next-extras">${eventExtras(e)}</div>
+    ${state.isAdmin ? `<div class="team-actions">${e.id
+      ? `<button class="btn sm" data-act="ev-edit" data-id="${e.id}">Editar</button><button class="btn sm danger" data-act="ev-cancel-event" data-id="${e.id}">Cancelar partida</button>`
+      : `<button class="btn sm primary" data-act="ev-fallback">Guardar esta partida en el calendario</button>`}</div>` : ""}`;
 }
 
 function renderStats() {
@@ -372,6 +378,9 @@ function renderCalendar() {
   const past = all.filter((e) => e.ms <= now - 3 * 3600e3).sort((a, b) => b.ms - a.ms);
   const adminBtns = (e) => state.isAdmin ? `<div class="team-actions">
       <button class="btn sm" data-act="ev-edit" data-id="${e.id}">Editar</button>
+      ${e.status === "cancelled"
+        ? `<button class="btn sm" data-act="ev-restore" data-id="${e.id}">Reactivar</button>`
+        : e.ms > now ? `<button class="btn sm danger" data-act="ev-cancel-event" data-id="${e.id}">Cancelar</button>` : ""}
       <button class="btn sm" data-act="res-open" data-id="${e.id}">Resultados</button>
       <button class="btn sm danger" data-act="ev-del" data-id="${e.id}">Borrar</button></div>` : "";
   const card = (e) => {
@@ -381,12 +390,14 @@ function renderCalendar() {
       const ts = Object.values(r.teams).filter((t) => t.place).sort((a, b) => a.place - b.place).slice(0, 3);
       if (ts.length) podium = `<ol class="podium">${ts.map((t) => `<li><b>${placeLabel(t.place)}</b> ${esc(t.name)}</li>`).join("")}</ol>`;
     }
-    return `<article class="event">
+    const cancelled = e.status === "cancelled";
+    return `<article class="event ${cancelled ? "cancelled" : ""}">
       <p class="ev-when">${esc(whenLine(e.ms))}</p>
-      <h3>${esc(e.title)}</h3>
+      <h3>${cancelled ? `<span class="tag danger-tag">Cancelada</span> ` : ""}${esc(e.title)}</h3>
+      ${cancelled && e.cancelReason ? `<p class="small">Motivo: ${esc(e.cancelReason)}</p>` : ""}
       ${e.notes ? `<p class="muted small">${esc(e.notes)}</p>` : ""}
       ${e.ms > now ? `<p class="count small">${esc(countdown(e.ms))}</p>` : ""}
-      ${e.ms > now - 3 * 3600e3 ? eventExtras(e) : ""}
+      ${e.ms > now - 3 * 3600e3 && !cancelled ? eventExtras(e) : ""}
       ${podium}
       ${adminBtns(e)}
     </article>`;
@@ -599,11 +610,13 @@ async function saveEvent(form) {
   if (id) b.update(ref, data); else b.set(ref, { ...data, createdBy: myEmail(), createdAt: serverTimestamp() });
   if (code || link) b.set(doc(db, "lobby", ref.id), { code, link });
   else if (state.lobby.has(ref.id)) b.delete(doc(db, "lobby", ref.id));
+  const fromSugg = form.dataset.fromSuggestion;
+  if (!id && fromSugg && state.suggestions.some((x) => x.id === fromSugg)) b.delete(doc(db, "suggestions", fromSugg));
   const ok = await run(() => b.commit(), id ? "Partida actualizada" : "Partida creada");
   if (ok) resetEventForm();
 }
 function resetEventForm() {
-  const f = $("ev-form"); f.reset(); f.elements.id.value = "";
+  const f = $("ev-form"); f.reset(); f.elements.id.value = ""; delete f.dataset.fromSuggestion;
   $("ev-form-title").textContent = "Nueva partida";
 }
 function editEvent(id) {
@@ -655,6 +668,111 @@ function deleteResults(id) {
   return run(() => deleteDoc(doc(db, "results", id)), "Resultados borrados").then(() => renderResultsForm(id));
 }
 
+// ---------- Cancelar / reactivar / anuncio ----------
+async function cancelEvent(id) {
+  const e = state.events.get(id); if (!e) return;
+  const reason = prompt(`¿Cancelar "${e.title}"? Escribe el motivo (se mostrará en la página):`, "");
+  if (reason === null) return;
+  const r = reason.trim().slice(0, 140);
+  const announce = confirm("¿Publicar también un anuncio arriba de la página?");
+  const b = writeBatch(db);
+  b.update(doc(db, "events", id), { status: "cancelled", cancelReason: r });
+  if (announce) b.set(doc(db, "settings", "announcement"), {
+    text: `❌ Cancelada: ${e.title} (${fmt(tsMs(e.startsAt), ADMIN_TZ.id)})${r ? ". " + r : ""}`.slice(0, 280),
+    kind: "warning", active: true, updatedAt: serverTimestamp(), updatedBy: myEmail()
+  });
+  return run(() => b.commit(), "Partida cancelada");
+}
+function restoreEvent(id) {
+  return run(() => updateDoc(doc(db, "events", id), { status: "active", cancelReason: "" }), "Partida reactivada");
+}
+function fallbackToForm() {
+  const f = $("ev-form"); resetEventForm();
+  f.elements.title.value = FALLBACK_EVENT.title;
+  f.elements.notes.value = FALLBACK_EVENT.notes || "";
+  f.elements.when.value = msToAdminInput(tsMs(FALLBACK_EVENT.startsAt));
+  location.hash = "#admin"; setTimeout(() => f.scrollIntoView({ behavior: "smooth", block: "center" }), 50);
+}
+function renderAnnouncement() {
+  const a = state.announcement;
+  const el = $("announcement");
+  if (a?.active && a.text) { el.hidden = false; el.className = "announce " + (a.kind || "info"); el.innerHTML = `<div class="wrap">${esc(a.text)}</div>`; }
+  else el.hidden = true;
+  const f = $("ann-form");
+  if (f && document.activeElement?.form !== f) {
+    f.elements.text.value = a?.text || ""; f.elements.kind.value = a?.kind || "info"; f.elements.active.checked = !!a?.active;
+  }
+}
+function saveAnnouncement(form) {
+  const f = new FormData(form);
+  const text = String(f.get("text") || "").trim().slice(0, 280);
+  return run(() => setDoc(doc(db, "settings", "announcement"), {
+    text, kind: String(f.get("kind")), active: f.get("active") === "on" && !!text, updatedAt: serverTimestamp(), updatedBy: myEmail()
+  }), "Anuncio guardado");
+}
+function clearAnnouncement() {
+  return run(() => setDoc(doc(db, "settings", "announcement"), { text: "", kind: "info", active: false, updatedAt: serverTimestamp(), updatedBy: myEmail() }), "Anuncio quitado");
+}
+
+// ---------- Sugerencias de horario ----------
+function renderSuggestions() {
+  const box = $("suggestions"); if (!box) return;
+  const now = Date.now();
+  const list = state.suggestions.map((x) => ({ ...x, ms: tsMs(x.startsAt) })).filter((x) => x.ms > now - 3600e3)
+    .sort((a, b) => (b.votes?.length || 0) - (a.votes?.length || 0) || a.ms - b.ms);
+  const p = me();
+  $("sugg-form-wrap").innerHTML = p ? `<form data-form="suggest" class="row">
+      <input type="datetime-local" name="when" required style="flex:1;min-width:200px" aria-label="Fecha y hora (${ADMIN_TZ.label})">
+      <input name="note" maxlength="100" placeholder="Comentario (opcional)" style="flex:2;min-width:180px">
+      <button class="btn primary">Sugerir</button>
+    </form><p class="muted small">Escribe la hora en ${ADMIN_TZ.label}.</p>`
+    : `<p class="muted small">${state.user ? "Regístrate" : "Entra y regístrate"} para sugerir horarios y votar.</p>`;
+  if (!list.length) { box.innerHTML = `<div class="empty-note">Aún no hay sugerencias.</div>`; return; }
+  box.innerHTML = list.map((x) => {
+    const votes = x.votes || [];
+    const mine = p && votes.includes(p.id);
+    const author = state.players.get(x.uid)?.gamertag || "Alguien";
+    const canDel = state.isAdmin || (p && x.uid === p.id);
+    return `<div class="sugg">
+      <div class="who"><b>${esc(fmt(x.ms, ADMIN_TZ.id))}</b><small>${esc(author)}${x.note ? " · " + esc(x.note) : ""}${localTz !== ADMIN_TZ.id ? ` · ${esc(fmtTime(x.ms, localTz))} tu hora` : ""}</small></div>
+      <span class="btns">
+        <button class="btn sm ${mine ? "primary" : ""}" ${p ? "" : "disabled"} data-act="vote" data-id="${x.id}">👍 ${votes.length}</button>
+        ${state.isAdmin ? `<button class="btn sm" data-act="sugg-schedule" data-id="${x.id}">Agendar</button>` : ""}
+        ${canDel ? `<button class="btn sm danger" data-act="sugg-del" data-id="${x.id}" title="Borrar">✕</button>` : ""}
+      </span>
+    </div>`;
+  }).join("");
+}
+function addSuggestion(form) {
+  const f = new FormData(form); const when = String(f.get("when") || "");
+  if (!when) return toast("Elige fecha y hora", true);
+  const ms = adminInputToMs(when);
+  if (ms < Date.now()) return toast("Esa fecha ya pasó", true);
+  const uid = state.user.uid;
+  return run(() => addDoc(collection(db, "suggestions"), {
+    uid, startsAt: Timestamp.fromMillis(ms), note: String(f.get("note") || "").trim().slice(0, 100), votes: [uid], createdAt: serverTimestamp()
+  }), "¡Sugerencia enviada!").then((ok) => ok && form.reset());
+}
+function vote(id) {
+  const x = state.suggestions.find((y) => y.id === id); if (!x || !me()) return;
+  const uid = state.user.uid;
+  return run(() => updateDoc(doc(db, "suggestions", id), { votes: (x.votes || []).includes(uid) ? arrayRemove(uid) : arrayUnion(uid) }));
+}
+function deleteSuggestion(id) {
+  if (!confirm("¿Borrar esta sugerencia?")) return;
+  return run(() => deleteDoc(doc(db, "suggestions", id)), "Sugerencia borrada");
+}
+function scheduleSuggestion(id) {
+  const x = state.suggestions.find((y) => y.id === id); if (!x) return;
+  const f = $("ev-form"); resetEventForm();
+  f.elements.title.value = "Partida privada";
+  f.elements.notes.value = x.note || "";
+  f.elements.when.value = msToAdminInput(tsMs(x.startsAt));
+  f.dataset.fromSuggestion = id;
+  $("ev-form-title").textContent = "Agendar sugerencia";
+  location.hash = "#admin"; setTimeout(() => f.scrollIntoView({ behavior: "smooth", block: "center" }), 50);
+}
+
 function setRsvp(eventId, going) {
   const uid = state.user.uid;
   const cur = state.rsvps.get(eventId)?.get(uid);
@@ -687,14 +805,17 @@ document.addEventListener("click", (e) => {
     "ev-edit": () => editEvent(id), "ev-del": () => deleteEvent(id), "ev-cancel": resetEventForm,
     "res-open": () => openResults(id), "res-del": () => deleteResults(id),
     "admin-remove": () => removeAdmin(email),
-    rsvp: () => setRsvp(id, b.dataset.going === "1")
+    rsvp: () => setRsvp(id, b.dataset.going === "1"),
+    "ev-cancel-event": () => cancelEvent(id), "ev-restore": () => restoreEvent(id), "ev-fallback": fallbackToForm,
+    "ann-clear": clearAnnouncement,
+    vote: () => vote(id), "sugg-del": () => deleteSuggestion(id), "sugg-schedule": () => scheduleSuggestion(id)
   })[act]?.();
 });
 
 document.addEventListener("submit", (e) => {
   const f = e.target.closest("[data-form]"); if (!f) return;
   e.preventDefault();
-  ({ profile: saveProfile, team: createTeam, event: saveEvent, results: saveResults, admin: addAdmin })[f.dataset.form]?.(f);
+  ({ profile: saveProfile, team: createTeam, event: saveEvent, results: saveResults, admin: addAdmin, suggest: addSuggestion, announce: saveAnnouncement })[f.dataset.form]?.(f);
 });
 
 $("res-event").addEventListener("change", (e) => renderResultsForm(e.target.value));

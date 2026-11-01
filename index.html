@@ -10,6 +10,7 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
+  <div id="announcement" class="announce" role="status" hidden></div>
   <header class="hero">
     <div class="wrap">
       <p class="kicker" id="site-sub"></p>
@@ -56,6 +57,9 @@
     <section data-view="calendario" hidden>
       <div class="sec-head"><h2>Próximas partidas</h2></div>
       <div id="upcoming" class="events"></div>
+      <div class="sec-head" style="margin-top:28px"><h2>Sugerencias de horario</h2><span class="muted small">Vota con 👍</span></div>
+      <div id="sugg-form-wrap"></div>
+      <div id="suggestions" class="sugg-list"></div>
       <div class="sec-head" style="margin-top:28px"><h2>Partidas jugadas</h2></div>
       <div id="past" class="events"></div>
     </section>
@@ -82,6 +86,22 @@
           <div class="row" style="margin-top:12px">
             <button class="btn primary">Guardar partida</button>
             <button type="button" class="btn" data-act="ev-cancel">Limpiar</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="panel" style="margin-top:20px">
+        <h2>Anuncio</h2>
+        <p class="muted small">Se muestra arriba de la página para todos.</p>
+        <form data-form="announce" id="ann-form">
+          <label>Texto<input name="text" maxlength="280" placeholder="Ej. Hoy empezamos 30 min más tarde"></label>
+          <div class="row" style="margin-top:10px">
+            <select name="kind" style="width:auto"><option value="info">Info</option><option value="warning">Aviso</option><option value="success">Buena noticia</option></select>
+            <label class="check"><input type="checkbox" name="active" checked> Visible</label>
+          </div>
+          <div class="row" style="margin-top:12px">
+            <button class="btn primary">Publicar anuncio</button>
+            <button type="button" class="btn" data-act="ann-clear">Quitar anuncio</button>
           </div>
         </form>
       </div>
