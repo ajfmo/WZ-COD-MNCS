@@ -16,6 +16,7 @@ service cloud.firestore {
     }
 
     function playerPath(uid) { return /databases/$(database)/documents/players/$(uid); }
+    function reqPath(tid, uid) { return /databases/$(database)/documents/joinreqs/$(tid + '_' + uid); }
     function teamPath(tid)   { return /databases/$(database)/documents/teams/$(tid); }
 
     function validProfile(d) {
@@ -44,7 +45,8 @@ service cloud.firestore {
         && request.resource.data.teamId == null
         && validProfile(request.resource.data);
 
-      allow update: if profileEdit(uid)
+      allow update: if isOwner()
+        || profileEdit(uid)
         || (teamIdOnly() && (joining(uid) || leaving(uid)))
         || isAdmin();
 
@@ -65,12 +67,15 @@ service cloud.firestore {
 
       // Un jugador libre entra a un equipo: lo hace el capitán de ese equipo
       // (o el propio jugador al crear su equipo, porque queda como capitán).
+      // Un jugador libre entra a un equipo: lo agrega el capitán (también al crear su
+      // propio equipo o al aceptar una solicitud) o el propio jugador acepta una invitación.
       function joining(uid) {
         let t = request.resource.data.teamId;
         return resource.data.teamId == null
           && t is string
-          && getAfter(teamPath(t)).data.captainUid == request.auth.uid
-          && uid in getAfter(teamPath(t)).data.members;
+          && uid in getAfter(teamPath(t)).data.members
+          && (getAfter(teamPath(t)).data.captainUid == request.auth.uid
+              || (request.auth.uid == uid && get(reqPath(t, uid)).data.type == 'invite'));
       }
 
       // Un jugador sale de su equipo: lo hace él mismo o su capitán.
@@ -87,16 +92,19 @@ service cloud.firestore {
     match /teams/{tid} {
       allow read: if true;
 
-      allow create: if request.auth != null
+      allow create: if isOwner() || (request.auth != null
         && request.resource.data.keys().hasOnly(['name', 'captainUid', 'members', 'createdAt'])
         && request.resource.data.captainUid == request.auth.uid
         && request.resource.data.members == [request.auth.uid]
         && validName(request.resource.data.name)
         && get(playerPath(request.auth.uid)).data.teamId == null
-        && getAfter(playerPath(request.auth.uid)).data.teamId == tid;
+        && getAfter(playerPath(request.auth.uid)).data.teamId == tid)
+        || isAdmin();
 
-      allow update: if (isCaptain() && captainEdit(tid))
+      allow update: if isOwner()
+        || (isCaptain() && captainEdit(tid))
         || memberLeave()
+        || inviteJoin(tid)
         || isAdmin();
 
       allow delete: if (isCaptain() && freed(0) && freed(1) && freed(2) && freed(3))
@@ -133,6 +141,19 @@ service cloud.firestore {
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['members'])
           && request.resource.data.members == resource.data.members.removeAll([request.auth.uid])
           && getAfter(playerPath(request.auth.uid)).data.teamId == null;
+      }
+
+      // Un jugador libre se une aceptando una invitación del capitán.
+      function inviteJoin(tid) {
+        let uid = request.auth.uid;
+        return request.auth != null
+          && !(uid in resource.data.members)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['members'])
+          && request.resource.data.members == resource.data.members.concat([uid])
+          && request.resource.data.members.size() <= 4
+          && get(reqPath(tid, uid)).data.type == 'invite'
+          && get(playerPath(uid)).data.teamId == null
+          && getAfter(playerPath(uid)).data.teamId == tid;
       }
 
       // Para disolver el equipo, todos sus miembros deben quedar libres en la misma operación.
@@ -178,6 +199,26 @@ service cloud.firestore {
         && exists(/databases/$(database)/documents/events/$(request.resource.data.eventId))
         && isPlayer();
       allow delete: if (request.auth != null && resource.data.uid == request.auth.uid) || isAdmin();
+    }
+
+    // ---------- SOLICITUDES E INVITACIONES (id = teamId_uid) ----------
+    // type 'request': el jugador pide entrar. type 'invite': el capitán lo invita.
+    match /joinreqs/{rid} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null
+        && request.resource.data.keys().hasOnly(['teamId', 'uid', 'type', 'by', 'createdAt'])
+        && rid == request.resource.data.teamId + '_' + request.resource.data.uid
+        && request.resource.data.by == request.auth.uid
+        && get(playerPath(request.resource.data.uid)).data.teamId == null
+        && get(teamPath(request.resource.data.teamId)).data.members.size() < 4
+        && ((request.resource.data.type == 'request' && request.resource.data.uid == request.auth.uid)
+            || (request.resource.data.type == 'invite'
+                && get(teamPath(request.resource.data.teamId)).data.captainUid == request.auth.uid));
+      allow delete: if request.auth != null
+        && (resource.data.uid == request.auth.uid
+            || (exists(teamPath(resource.data.teamId))
+                && get(teamPath(resource.data.teamId)).data.captainUid == request.auth.uid)
+            || isAdmin());
     }
 
     // ---------- ANUNCIO Y AJUSTES ----------

@@ -26,10 +26,10 @@ const provider = new GoogleAuthProvider();
 const state = {
   user: null, isAdmin: false,
   players: new Map(), teams: new Map(), events: new Map(), results: new Map(), admins: [],
-  rsvps: new Map(), lobby: new Map(), suggestions: [], announcement: null,
+  rsvps: new Map(), lobby: new Map(), suggestions: [], announcement: null, joinreqs: [],
   loaded: { players: false, teams: false, events: false }
 };
-let unsubAdminDoc = null, unsubAdmins = null, unsubLobby = null;
+let unsubAdminDoc = null, unsubAdmins = null, unsubLobby = null, unsubReqs = null;
 
 const playerRef = (uid) => doc(db, "players", uid);
 const teamRef = (tid) => doc(db, "teams", tid);
@@ -90,6 +90,8 @@ onAuthStateChanged(auth, (u) => {
       (d) => { state.isAdmin = d.exists(); render(); renderResultsSelect(); },
       () => { state.isAdmin = false; render(); });
   }
+  unsubReqs?.(); unsubReqs = null; state.joinreqs = [];
+  if (u) unsubReqs = onSnapshot(collection(db, "joinreqs"), (s) => { state.joinreqs = s.docs.map((d) => ({ id: d.id, ...d.data() })); render(); }, onErr("las solicitudes"));
   if (isOwner()) {
     unsubAdmins = onSnapshot(collection(db, "admins"), (s) => { state.admins = s.docs.map((d) => ({ email: d.id, ...d.data() })); renderAdmins(); }, onErr("los admins"));
   }
@@ -150,6 +152,16 @@ function badgesFor(uid, s) {
 const placeLabel = (n) => (n ? `${n}º` : "—");
 
 // ---------- Render ----------
+// Solicitudes e invitaciones vigentes (descarta las que ya no aplican)
+function liveReqs() {
+  return state.joinreqs.filter((r) => {
+    const t = state.teams.get(r.teamId), p = state.players.get(r.uid);
+    return t && p && !p.teamId && (t.members || []).length < TEAM_SIZE;
+  });
+}
+const reqId = (tid, uid) => `${tid}_${uid}`;
+function reqFor(tid, uid) { return liveReqs().find((r) => r.teamId === tid && r.uid === uid); }
+
 function syncLobbySub() {
   const allowed = !!state.user && (!!me() || state.isAdmin);
   if (allowed && !unsubLobby) {
@@ -258,8 +270,17 @@ function renderMe() {
   if (t) {
     const isCap = t.captainUid === p.id;
     teamBlock = `<p>Estás en <b>${esc(t.name)}</b>${isCap ? ` como <b class="accent">capitán</b>` : ""} (${t.members.length}/${TEAM_SIZE}). <a href="#equipos">Ver equipos →</a></p>`;
+    if (isCap) {
+      const reqs = liveReqs().filter((r) => r.teamId === t.id && r.type === "request");
+      if (reqs.length) teamBlock += `<div class="inbox"><h3>📥 Solicitudes para unirse (${reqs.length})</h3>${reqs.map((r) => reqRow(r, "captain")).join("")}</div>`;
+    }
   } else {
-    teamBlock = `<p class="muted">Estás en el pool. Un capitán puede agregarte, o crea tu equipo (+${POINTS.inTeam + POINTS.captain} pts):</p>
+    const mine = liveReqs().filter((r) => r.uid === p.id);
+    const invites = mine.filter((r) => r.type === "invite"), requests = mine.filter((r) => r.type === "request");
+    teamBlock = "";
+    if (invites.length) teamBlock += `<div class="inbox"><h3>📨 Te invitaron (${invites.length})</h3>${invites.map((r) => reqRow(r, "player")).join("")}</div>`;
+    if (requests.length) teamBlock += `<div class="inbox"><h3>⏳ Tus solicitudes</h3>${requests.map((r) => reqRow(r, "player")).join("")}</div>`;
+    teamBlock += `<p class="muted">Estás en el pool. Pide unirte a un equipo en <a href="#equipos">Equipos</a>, espera una invitación o crea tu equipo (+${POINTS.inTeam + POINTS.captain} pts):</p>
       <form class="row" data-form="team">
         <input name="name" placeholder="Nombre del equipo" maxlength="30" minlength="2" required style="flex:1;min-width:180px">
         <button class="btn primary">Crear equipo</button>
@@ -276,6 +297,20 @@ function renderMe() {
     <details style="margin-top:12px"><summary class="muted">Editar mi perfil</summary>${profileForm(p)}
       ${!p.teamId ? `<button class="btn sm danger" data-act="delete-me">Borrar mi registro</button>` : ""}
     </details>`;
+}
+
+function reqRow(r, view) {
+  const t = state.teams.get(r.teamId), p = state.players.get(r.uid);
+  if (view === "captain") {
+    return `<div class="slot">${playerLine(p)}<span class="btns">
+      <button class="btn sm primary" data-act="req-accept" data-id="${r.id}">Aceptar</button>
+      <button class="btn sm" data-act="req-delete" data-id="${r.id}">Rechazar</button></span></div>`;
+  }
+  const label = r.type === "invite" ? `<b>${esc(t.name)}</b> <small class="muted">(${t.members.length}/${TEAM_SIZE})</small>` : `Pediste entrar a <b>${esc(t.name)}</b>`;
+  const btns = r.type === "invite"
+    ? `<button class="btn sm primary" data-act="req-accept" data-id="${r.id}">Unirme</button><button class="btn sm" data-act="req-delete" data-id="${r.id}">Rechazar</button>`
+    : `<button class="btn sm" data-act="req-delete" data-id="${r.id}">Cancelar</button>`;
+  return `<div class="slot"><div class="who">${label}</div><span class="btns">${btns}</span></div>`;
 }
 
 function profileForm(p) {
@@ -347,24 +382,46 @@ function renderTeams() {
     if (isMember && !isCap) actions += `<button class="btn sm" data-act="leave" data-team="${t.id}">Salir del equipo</button>`;
     if ((isCap && members.length === 1) || admin) actions += `<button class="btn sm danger" data-act="disband" data-team="${t.id}">Disolver</button>`;
     if (isCap && members.length > 1) actions += `<span class="muted small">Para salir, cede la capitanía (★) primero.</span>`;
+    const mp = me();
+    if (mp && !mp.teamId && !full) {
+      const r = reqFor(t.id, mp.id);
+      if (!r) actions += `<button class="btn sm primary" data-act="req-send" data-team="${t.id}">Pedir unirme</button>`;
+      else if (r.type === "request") actions += `<button class="btn sm" data-act="req-delete" data-id="${r.id}">Solicitud enviada · cancelar</button>`;
+      else actions += `<button class="btn sm primary" data-act="req-accept" data-id="${r.id}">Aceptar invitación</button>`;
+    }
+    let pending = "";
+    if (isCap || admin) {
+      const reqs = liveReqs().filter((r) => r.teamId === t.id);
+      const inReq = reqs.filter((r) => r.type === "request"), inv = reqs.filter((r) => r.type === "invite");
+      if (inReq.length) pending += `<div class="pending"><p class="small"><b>📥 Solicitudes</b></p>${inReq.map((r) => reqRow(r, "captain")).join("")}</div>`;
+      if (inv.length) pending += `<p class="small muted pending">📨 Invitados: ${inv.map((r) => `${esc(state.players.get(r.uid)?.gamertag)} <button class="linkish small" data-act="req-delete" data-id="${r.id}">(cancelar)</button>`).join(", ")}</p>`;
+    }
     return `<article class="team ${isMember ? "mine" : ""}">
       <div class="team-top"><h3>${esc(t.name)}</h3><span class="tag ${full ? "full" : ""}">${full ? "Completo" : `${members.length}/${TEAM_SIZE}`}</span></div>
       <ul class="slots">${slots.join("")}</ul>
       ${actions ? `<div class="team-actions">${actions}</div>` : ""}
+      ${pending}
     </article>`;
   }).join("");
 }
 
 function renderPool() {
+  $("auto-wrap").innerHTML = state.isAdmin ? `<button class="btn sm" data-act="auto-build" style="margin:4px 0 8px">⚙️ Armar equipos con el pool</button>` : "";
   const pool = [...state.players.values()].filter((p) => !p.teamId).sort((a, b) => tsMs(a.createdAt) - tsMs(b.createdAt));
   $("pool-count").textContent = pool.length ? `${pool.length} libres` : "";
   if (!state.loaded.players) { $("pool").innerHTML = `<p class="muted">Cargando…</p>`; return; }
   if (!pool.length) { $("pool").innerHTML = `<div class="empty-note">Nadie en el pool ahora mismo.</div>`; return; }
   const t = myTeam();
-  const canAdd = t && t.captainUid === state.user?.uid && (t.members || []).length < TEAM_SIZE;
+  const canInvite = t && t.captainUid === state.user?.uid && (t.members || []).length < TEAM_SIZE;
   $("pool").innerHTML = pool.map((p) => {
     let btns = "";
-    if (canAdd) btns += `<button class="btn sm primary" data-act="add" data-uid="${p.id}">Agregar</button>`;
+    if (canInvite) {
+      const r = reqFor(t.id, p.id);
+      if (!r) btns += `<button class="btn sm primary" data-act="req-invite" data-uid="${p.id}">Invitar</button>`;
+      else if (r.type === "invite") btns += `<button class="btn sm" data-act="req-delete" data-id="${r.id}" title="Cancelar invitación">Invitado ✓</button>`;
+      else btns += `<button class="btn sm primary" data-act="req-accept" data-id="${r.id}">Aceptar solicitud</button>`;
+    }
+    if (state.isAdmin && state.teams.size) btns += `<button class="btn sm" title="Asignar a un equipo" data-act="admin-assign" data-uid="${p.id}">➜</button>`;
     if (state.isAdmin && p.id !== state.user.uid) btns += `<button class="btn sm danger" title="Borrar jugador" data-act="admin-del-player" data-uid="${p.id}">✕</button>`;
     return `<div class="slot">${playerLine(p)}<span class="btns">${btns}</span></div>`;
   }).join("");
@@ -773,6 +830,75 @@ function scheduleSuggestion(id) {
   location.hash = "#admin"; setTimeout(() => f.scrollIntoView({ behavior: "smooth", block: "center" }), 50);
 }
 
+// ---------- Invitaciones y solicitudes ----------
+function sendRequest(tid) {
+  const uid = state.user.uid;
+  return run(() => setDoc(doc(db, "joinreqs", reqId(tid, uid)), { teamId: tid, uid, type: "request", by: uid, createdAt: serverTimestamp() }),
+    "Solicitud enviada al capitán");
+}
+function sendInvite(uid) {
+  const t = myTeam(); if (!t) return;
+  return run(() => setDoc(doc(db, "joinreqs", reqId(t.id, uid)), { teamId: t.id, uid, type: "invite", by: state.user.uid, createdAt: serverTimestamp() }),
+    `Invitación enviada a ${state.players.get(uid)?.gamertag || "jugador"}`);
+}
+function deleteReq(id) {
+  return run(() => deleteDoc(doc(db, "joinreqs", id)));
+}
+function acceptReq(id) {
+  const r = state.joinreqs.find((x) => x.id === id); if (!r) return;
+  const t = state.teams.get(r.teamId);
+  if (!t || (t.members || []).length >= TEAM_SIZE) return toast("Ese equipo ya está completo", true);
+  const b = writeBatch(db);
+  b.update(teamRef(t.id), { members: arrayUnion(r.uid) });
+  b.update(playerRef(r.uid), { teamId: t.id });
+  if (r.uid === state.user.uid) {
+    // El jugador acepta una invitación: limpia todas sus solicitudes/invitaciones pendientes.
+    state.joinreqs.filter((x) => x.uid === r.uid).forEach((x) => b.delete(doc(db, "joinreqs", x.id)));
+  } else {
+    b.delete(doc(db, "joinreqs", id));
+  }
+  return run(() => b.commit(), r.uid === state.user.uid ? `¡Te uniste a ${t.name}!` : `${state.players.get(r.uid)?.gamertag || "Jugador"} se unió al equipo`);
+}
+function adminAssign(uid) {
+  const teams = [...state.teams.values()].filter((t) => (t.members || []).length < TEAM_SIZE);
+  if (!teams.length) return toast("Todos los equipos están completos", true);
+  const pick = prompt(`¿A qué equipo mandas a ${state.players.get(uid)?.gamertag}?\n` + teams.map((t, i) => `${i + 1}. ${t.name} (${t.members.length}/${TEAM_SIZE})`).join("\n"));
+  const t = teams[parseInt(pick, 10) - 1]; if (!t) return;
+  const b = writeBatch(db);
+  b.update(teamRef(t.id), { members: arrayUnion(uid) });
+  b.update(playerRef(uid), { teamId: t.id });
+  return run(() => b.commit(), `Asignado a ${t.name}`);
+}
+
+// ---------- Armado automático (admin) ----------
+async function autoBuild() {
+  const pool = [...state.players.values()].filter((p) => !p.teamId);
+  if (pool.length < 2) return toast("Hace falta al menos 2 jugadores en el pool", true);
+  const mode = prompt(`Armar equipos con ${pool.length} jugadores del pool.\n1 = al azar\n2 = equilibrados por puntos`, "2");
+  if (mode !== "1" && mode !== "2") return;
+  let list = pool.map((p) => ({ p, pts: statsFor(p.id).points }));
+  if (mode === "1") list.sort(() => Math.random() - 0.5);
+  else list.sort((a, b) => b.pts - a.pts);
+  const n = Math.ceil(list.length / TEAM_SIZE);
+  const groups = Array.from({ length: n }, () => []);
+  if (mode === "1") list.forEach((x, i) => groups[Math.floor(i / TEAM_SIZE)].push(x));
+  else list.forEach((x, i) => { const round = Math.floor(i / n), pos = i % n; groups[round % 2 ? n - 1 - pos : pos].push(x); }); // draft en serpiente
+  const preview = groups.map((g, i) => `Escuadra ${i + 1}: ${g.map((x) => x.p.gamertag).join(", ")}`).join("\n");
+  if (!confirm(`Se crearán ${n} equipos (el primero de cada lista es capitán):\n\n${preview}`)) return;
+  const used = new Set([...state.teams.values()].map((t) => t.name.toLowerCase()));
+  let k = 1, made = 0;
+  for (const g of groups) {
+    while (used.has(`escuadra ${k}`)) k++;
+    const name = `Escuadra ${k}`; used.add(name.toLowerCase());
+    const ref = doc(collection(db, "teams")), b = writeBatch(db);
+    b.set(ref, { name, captainUid: g[0].p.id, members: g.map((x) => x.p.id), createdAt: serverTimestamp() });
+    g.forEach((x) => b.update(playerRef(x.p.id), { teamId: ref.id }));
+    if (!(await run(() => b.commit()))) break;
+    made++;
+  }
+  if (made) toast(`${made} equipo${made === 1 ? "" : "s"} creado${made === 1 ? "" : "s"}`);
+}
+
 function setRsvp(eventId, going) {
   const uid = state.user.uid;
   const cur = state.rsvps.get(eventId)?.get(uid);
@@ -808,6 +934,8 @@ document.addEventListener("click", (e) => {
     rsvp: () => setRsvp(id, b.dataset.going === "1"),
     "ev-cancel-event": () => cancelEvent(id), "ev-restore": () => restoreEvent(id), "ev-fallback": fallbackToForm,
     "ann-clear": clearAnnouncement,
+    "req-send": () => sendRequest(team), "req-invite": () => sendInvite(uid), "req-delete": () => deleteReq(id), "req-accept": () => acceptReq(id),
+    "admin-assign": () => adminAssign(uid), "auto-build": autoBuild,
     vote: () => vote(id), "sugg-del": () => deleteSuggestion(id), "sugg-schedule": () => scheduleSuggestion(id)
   })[act]?.();
 });
