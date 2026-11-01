@@ -22,7 +22,13 @@ service cloud.firestore {
       return d.gamertag is string && d.gamertag.size() >= 2 && d.gamertag.size() <= 24
         && d.activisionId is string && d.activisionId.size() <= 40
         && d.platform in ['PC', 'PlayStation', 'Xbox']
-        && d.mic is bool;
+        && d.mic is bool
+        && (!('trackerUrl' in d) || (d.trackerUrl is string && d.trackerUrl.size() <= 200
+            && (d.trackerUrl == '' || d.trackerUrl.matches('https://.*'))));
+    }
+
+    function isPlayer() {
+      return request.auth != null && exists(/databases/$(database)/documents/players/$(request.auth.uid));
     }
 
     function validName(n) {
@@ -34,7 +40,7 @@ service cloud.firestore {
       allow read: if true;
 
       allow create: if request.auth != null && request.auth.uid == uid
-        && request.resource.data.keys().hasOnly(['gamertag', 'activisionId', 'platform', 'mic', 'teamId', 'createdAt', 'updatedAt'])
+        && request.resource.data.keys().hasOnly(['gamertag', 'activisionId', 'platform', 'mic', 'trackerUrl', 'teamId', 'createdAt', 'updatedAt'])
         && request.resource.data.teamId == null
         && validProfile(request.resource.data);
 
@@ -48,7 +54,7 @@ service cloud.firestore {
       function profileEdit(uid) {
         return request.auth != null && request.auth.uid == uid
           && request.resource.data.diff(resource.data).affectedKeys()
-               .hasOnly(['gamertag', 'activisionId', 'platform', 'mic', 'updatedAt'])
+               .hasOnly(['gamertag', 'activisionId', 'platform', 'mic', 'trackerUrl', 'updatedAt'])
           && validProfile(request.resource.data);
       }
 
@@ -153,6 +159,25 @@ service cloud.firestore {
         && request.resource.data.title.size() >= 2 && request.resource.data.title.size() <= 60
         && request.resource.data.startsAt is timestamp;
       allow delete: if isAdmin();
+    }
+
+    // ---------- DATOS PRIVADOS DEL LOBBY (solo jugadores registrados) ----------
+    match /lobby/{eventId} {
+      allow read: if isPlayer() || isAdmin();
+      allow write: if isAdmin();
+    }
+
+    // ---------- CONFIRMACIONES DE ASISTENCIA (id = eventId_uid) ----------
+    match /rsvps/{rid} {
+      allow read: if true;
+      allow create, update: if request.auth != null
+        && request.resource.data.keys().hasOnly(['eventId', 'uid', 'going', 'at'])
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.going is bool
+        && rid == request.resource.data.eventId + '_' + request.auth.uid
+        && exists(/databases/$(database)/documents/events/$(request.resource.data.eventId))
+        && isPlayer();
+      allow delete: if (request.auth != null && resource.data.uid == request.auth.uid) || isAdmin();
     }
 
     // ---------- RESULTADOS POR PARTIDA (id = id del evento) ----------

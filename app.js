@@ -26,9 +26,10 @@ const provider = new GoogleAuthProvider();
 const state = {
   user: null, isAdmin: false,
   players: new Map(), teams: new Map(), events: new Map(), results: new Map(), admins: [],
+  rsvps: new Map(), lobby: new Map(),
   loaded: { players: false, teams: false, events: false }
 };
-let unsubAdminDoc = null, unsubAdmins = null;
+let unsubAdminDoc = null, unsubAdmins = null, unsubLobby = null;
 
 const playerRef = (uid) => doc(db, "players", uid);
 const teamRef = (tid) => doc(db, "teams", tid);
@@ -71,6 +72,11 @@ const onErr = (what) => (e) => toast(`No se pudieron cargar ${what}: ${e.message
 onSnapshot(collection(db, "players"), (s) => { state.players = new Map(s.docs.map((d) => [d.id, { id: d.id, ...d.data() }])); state.loaded.players = true; render(); }, onErr("los jugadores"));
 onSnapshot(collection(db, "teams"), (s) => { state.teams = new Map(s.docs.map((d) => [d.id, { id: d.id, ...d.data() }])); state.loaded.teams = true; render(); }, onErr("los equipos"));
 onSnapshot(collection(db, "events"), (s) => { state.events = new Map(s.docs.map((d) => [d.id, { id: d.id, ...d.data() }])); state.loaded.events = true; render(); renderResultsSelect(); }, onErr("el calendario"));
+onSnapshot(collection(db, "rsvps"), (s) => {
+  const m = new Map();
+  s.docs.forEach((d) => { const r = d.data(); if (!m.has(r.eventId)) m.set(r.eventId, new Map()); m.get(r.eventId).set(r.uid, r.going); });
+  state.rsvps = m; render();
+}, onErr("las confirmaciones"));
 onSnapshot(collection(db, "results"), (s) => { state.results = new Map(s.docs.map((d) => [d.id, { id: d.id, ...d.data() }])); render(); }, onErr("los resultados"));
 
 onAuthStateChanged(auth, (u) => {
@@ -142,7 +148,17 @@ function badgesFor(uid, s) {
 const placeLabel = (n) => (n ? `${n}º` : "—");
 
 // ---------- Render ----------
+function syncLobbySub() {
+  const allowed = !!state.user && (!!me() || state.isAdmin);
+  if (allowed && !unsubLobby) {
+    unsubLobby = onSnapshot(collection(db, "lobby"),
+      (s) => { state.lobby = new Map(s.docs.map((d) => [d.id, d.data()])); renderNext(); renderCalendar(); },
+      () => { state.lobby = new Map(); });
+  } else if (!allowed && unsubLobby) { unsubLobby(); unsubLobby = null; state.lobby = new Map(); }
+}
+
 function render() {
+  syncLobbySub();
   $("tab-admin").hidden = !state.isAdmin;
   applyTab();
   renderNext(); renderStats(); renderMe(); renderPointsHelp(); renderMiniRank();
@@ -157,6 +173,34 @@ function nextEvent() {
   if (state.loaded.events && !state.events.size) return { ...FALLBACK_EVENT, ms: tsMs(FALLBACK_EVENT.startsAt) };
   return null;
 }
+function shareLink(e) {
+  const url = location.origin + location.pathname;
+  const text = `🎮 ${e.title}\n🗓️ ${fmt(e.ms, ADMIN_TZ.id)} (${ADMIN_TZ.label})${e.notes ? "\n📝 " + e.notes : ""}\n👉 Regístrate, confirma y arma tu equipo: ${url}`;
+  return `https://wa.me/?text=${encodeURIComponent(text)}`;
+}
+function eventExtras(e, { showNames = true } = {}) {
+  const parts = [];
+  if (e.id && e.ms > Date.now() - 3 * 3600e3) {
+    const r = state.rsvps.get(e.id) || new Map();
+    const going = [...r].filter(([, g]) => g).map(([u]) => u);
+    const names = going.map((u) => state.players.get(u)?.gamertag).filter(Boolean);
+    parts.push(`<p class="rsvp-count">✅ <b>${going.length}</b> confirmado${going.length === 1 ? "" : "s"}${showNames && names.length ? `: <span class="muted">${names.map(esc).join(", ")}</span>` : ""}</p>`);
+    const p = me();
+    if (p) {
+      const mine = r.get(p.id);
+      parts.push(`<div class="row rsvp">
+        <button class="btn sm ${mine === true ? "primary" : ""}" data-act="rsvp" data-id="${e.id}" data-going="1">${mine === true ? "✓ Voy" : "Voy"}</button>
+        <button class="btn sm ${mine === false ? "on-no" : ""}" data-act="rsvp" data-id="${e.id}" data-going="0">No voy</button>
+      </div>`);
+    } else if (state.user) parts.push(`<p class="muted small">Regístrate para confirmar asistencia.</p>`);
+    const lob = state.lobby.get(e.id);
+    if (lob && (lob.code || lob.link)) {
+      parts.push(`<div class="lobby">🔒 ${lob.code ? `Código: <b>${esc(lob.code)}</b>` : ""}${lob.code && lob.link ? " · " : ""}${lob.link ? `<a href="${esc(lob.link)}" target="_blank" rel="noopener">Abrir enlace</a>` : ""}</div>`);
+    } else if (!me()) parts.push(`<p class="muted small">🔒 El código del lobby se ve al registrarte.</p>`);
+  }
+  parts.push(`<a class="btn sm wa" href="${shareLink(e)}" target="_blank" rel="noopener">Compartir por WhatsApp</a>`);
+  return parts.join("");
+}
 function renderNext() {
   const e = nextEvent();
   if (!e) { $("next").innerHTML = state.loaded.events ? `<p class="muted">No hay partidas programadas.</p>` : ""; return; }
@@ -165,7 +209,8 @@ function renderNext() {
     <p class="next-title">${esc(e.title)}</p>
     <p class="when">${esc(whenLine(e.ms))}</p>
     <p class="count">${esc(countdown(e.ms))}</p>
-    ${e.notes ? `<p class="notes">${esc(e.notes)}</p>` : ""}`;
+    ${e.notes ? `<p class="notes">${esc(e.notes)}</p>` : ""}
+    <div class="next-extras">${eventExtras(e)}</div>`;
 }
 
 function renderStats() {
@@ -234,6 +279,8 @@ function profileForm(p) {
       <label>Activision ID<input name="activisionId" maxlength="40" placeholder="Nombre#1234567" value="${esc(p.activisionId)}"></label>
       <label>Plataforma<select name="platform">${PLATFORMS.map((x) => `<option ${p.platform === x ? "selected" : ""}>${x}</option>`).join("")}</select></label>
     </div>
+    <label>Link de tu tracker (opcional)<input name="trackerUrl" type="url" maxlength="200" placeholder="https://cod.tracker.gg/…" value="${esc(p.trackerUrl)}"></label>
+    <p class="muted small" style="margin:4px 0 10px">Para que se vean tus stats, pon tu cuenta de Activision en <b>Público</b>.</p>
     <label class="check"><input type="checkbox" name="mic" ${p.mic !== false ? "checked" : ""}> Tengo micrófono</label>
     <div class="row" style="margin-top:12px"><button class="btn primary">${p.gamertag ? "Guardar cambios" : "Registrarme"}</button></div>
   </form>`;
@@ -339,6 +386,7 @@ function renderCalendar() {
       <h3>${esc(e.title)}</h3>
       ${e.notes ? `<p class="muted small">${esc(e.notes)}</p>` : ""}
       ${e.ms > now ? `<p class="count small">${esc(countdown(e.ms))}</p>` : ""}
+      ${e.ms > now - 3 * 3600e3 ? eventExtras(e) : ""}
       ${podium}
       ${adminBtns(e)}
     </article>`;
@@ -364,6 +412,7 @@ function openProfile(uid) {
       <button class="btn sm" data-act="close-profile" aria-label="Cerrar">✕</button>
     </div>
     <p class="muted small">${[p.platform, p.activisionId, p.mic ? "🎙️ micro" : "sin micro"].filter(Boolean).map(esc).join(" · ")}</p>
+    ${p.trackerUrl ? `<p><a class="btn sm" href="${esc(p.trackerUrl)}" target="_blank" rel="noopener">📊 Ver stats en su tracker</a></p>` : ""}
     <p>${t ? `Equipo: <b>${esc(t.name)}</b>${t.captainUid === uid ? " (capitán)" : ""}` : `<span class="muted">En el pool</span>`}</p>
     <div class="stats">
       <div class="stat"><b>${s.points}</b><span>puntos</span></div>
@@ -401,13 +450,14 @@ function renderResultsForm(eventId) {
   const box = $("res-form");
   if (!eventId) { box.innerHTML = ""; return; }
   const r = state.results.get(eventId) || { teams: {}, players: {} };
+  const rs = state.rsvps.get(eventId);
   const teams = [...state.teams.values()];
   // equipos guardados que ya no existen
   for (const [tid, t] of Object.entries(r.teams || {})) if (!state.teams.has(tid)) {
     teams.push({ id: tid, name: t.name + " (disuelto)", members: Object.entries(r.players || {}).filter(([, v]) => v.teamId === tid).map(([u]) => u) });
   }
   if (!teams.length) { box.innerHTML = `<p class="muted">No hay equipos registrados.</p>`; return; }
-  box.innerHTML = `<form data-form="results" data-event="${eventId}">
+  box.innerHTML = `${!state.results.has(eventId) && rs?.size ? `<p class="muted small">Asistencia precargada según quién confirmó "Voy".</p>` : ""}<form data-form="results" data-event="${eventId}">
     ${teams.map((t) => {
       const tr = r.teams?.[t.id] || {};
       return `<fieldset class="res-team" data-team="${t.id}" data-name="${esc(tr.name || t.name)}">
@@ -420,7 +470,7 @@ function renderResultsForm(eventId) {
           const p = state.players.get(uid);
           return `<div class="res-player" data-uid="${uid}">
             <span class="res-name">${esc(p?.gamertag || "(eliminado)")}</span>
-            <label class="check"><input type="checkbox" name="attended" ${pr.attended !== false ? "checked" : ""}> Asistió</label>
+            <label class="check"><input type="checkbox" name="attended" ${(pr.attended ?? (rs?.size ? rs.get(uid) === true : true)) ? "checked" : ""}> Asistió</label>
             <label class="inline">Kills <input type="number" name="kills" min="0" max="200" value="${pr.kills ?? 0}"></label>
             <label class="inline">Bonus <input type="number" name="bonus" min="-100" max="100" value="${pr.bonus ?? 0}"></label>
           </div>`;
@@ -458,8 +508,10 @@ function saveProfile(form) {
     gamertag: String(f.get("gamertag") || "").trim().slice(0, 24),
     activisionId: String(f.get("activisionId") || "").trim().slice(0, 40),
     platform: String(f.get("platform")),
-    mic: f.get("mic") === "on"
+    mic: f.get("mic") === "on",
+    trackerUrl: String(f.get("trackerUrl") || "").trim().slice(0, 200)
   };
+  if (data.trackerUrl && !/^https:\/\//.test(data.trackerUrl)) return toast("El link del tracker debe empezar con https://", true);
   if (data.gamertag.length < 2) return toast("El gamertag debe tener al menos 2 caracteres", true);
   const uid = state.user.uid;
   if (me()) return run(() => updateDoc(playerRef(uid), { ...data, updatedAt: serverTimestamp() }), "Perfil actualizado");
@@ -539,8 +591,15 @@ async function saveEvent(form) {
   const id = f.get("id"), title = String(f.get("title") || "").trim().slice(0, 60), when = String(f.get("when") || "");
   if (title.length < 2 || !when) return toast("Falta título o fecha", true);
   const data = { title, notes: String(f.get("notes") || "").trim().slice(0, 200), startsAt: Timestamp.fromMillis(adminInputToMs(when)) };
-  const ok = await run(() => id ? updateDoc(doc(db, "events", id), data)
-    : addDoc(collection(db, "events"), { ...data, createdBy: myEmail(), createdAt: serverTimestamp() }), id ? "Partida actualizada" : "Partida creada");
+  const code = String(f.get("lobbyCode") || "").trim().slice(0, 60);
+  const link = String(f.get("lobbyLink") || "").trim().slice(0, 300);
+  if (link && !/^https:\/\//.test(link)) return toast("El enlace debe empezar con https://", true);
+  const ref = id ? doc(db, "events", id) : doc(collection(db, "events"));
+  const b = writeBatch(db);
+  if (id) b.update(ref, data); else b.set(ref, { ...data, createdBy: myEmail(), createdAt: serverTimestamp() });
+  if (code || link) b.set(doc(db, "lobby", ref.id), { code, link });
+  else if (state.lobby.has(ref.id)) b.delete(doc(db, "lobby", ref.id));
+  const ok = await run(() => b.commit(), id ? "Partida actualizada" : "Partida creada");
   if (ok) resetEventForm();
 }
 function resetEventForm() {
@@ -552,6 +611,8 @@ function editEvent(id) {
   const f = $("ev-form");
   f.elements.id.value = id; f.elements.title.value = e.title; f.elements.notes.value = e.notes || "";
   f.elements.when.value = msToAdminInput(tsMs(e.startsAt));
+  const lob = state.lobby.get(id) || {};
+  f.elements.lobbyCode.value = lob.code || ""; f.elements.lobbyLink.value = lob.link || "";
   $("ev-form-title").textContent = "Editar partida";
   location.hash = "#admin"; setTimeout(() => f.scrollIntoView({ behavior: "smooth", block: "center" }), 50);
 }
@@ -561,6 +622,8 @@ function deleteEvent(id) {
   const b = writeBatch(db);
   b.delete(doc(db, "events", id));
   if (state.results.has(id)) b.delete(doc(db, "results", id));
+  if (state.lobby.has(id)) b.delete(doc(db, "lobby", id));
+  for (const uid of (state.rsvps.get(id) || new Map()).keys()) b.delete(doc(db, "rsvps", `${id}_${uid}`));
   return run(() => b.commit(), "Partida borrada");
 }
 function openResults(id) {
@@ -592,6 +655,14 @@ function deleteResults(id) {
   return run(() => deleteDoc(doc(db, "results", id)), "Resultados borrados").then(() => renderResultsForm(id));
 }
 
+function setRsvp(eventId, going) {
+  const uid = state.user.uid;
+  const cur = state.rsvps.get(eventId)?.get(uid);
+  const ref = doc(db, "rsvps", `${eventId}_${uid}`);
+  if (cur === going) return run(() => deleteDoc(ref));
+  return run(() => setDoc(ref, { eventId, uid, going, at: serverTimestamp() }), going ? "¡Confirmado! Te esperamos" : "Anotado: no vas");
+}
+
 function addAdmin(form) {
   const email = String(new FormData(form).get("email") || "").trim().toLowerCase();
   if (!email.includes("@")) return toast("Correo no válido", true);
@@ -615,7 +686,8 @@ document.addEventListener("click", (e) => {
     profile: () => openProfile(uid), "close-profile": () => $("profile").close(),
     "ev-edit": () => editEvent(id), "ev-del": () => deleteEvent(id), "ev-cancel": resetEventForm,
     "res-open": () => openResults(id), "res-del": () => deleteResults(id),
-    "admin-remove": () => removeAdmin(email)
+    "admin-remove": () => removeAdmin(email),
+    rsvp: () => setRsvp(id, b.dataset.going === "1")
   })[act]?.();
 });
 

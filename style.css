@@ -164,3 +164,14 @@ label.inline { display: flex; align-items: center; gap: 6px; font-size: 13px; }
 label.inline input { width: 72px; min-height: 36px; padding: 6px 8px; }
 .admin-list { list-style: none; padding: 0; margin: 12px 0 0; display: grid; gap: 6px; }
 .admin-list li { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 10px; background: var(--surface-2); border-radius: 8px; word-break: break-all; }
+
+/* ---------- v3: asistencia, lobby, compartir ---------- */
+.next-extras, .event .rsvp-count { margin-top: 8px; }
+.next-extras { display: grid; gap: 8px; justify-items: start; }
+.event > .rsvp, .event > .lobby, .event > .wa { margin-top: 8px; }
+.rsvp-count { margin: 6px 0 0; font-size: 14px; }
+.rsvp { gap: 6px; }
+.btn.on-no { border-color: var(--danger); color: var(--danger); }
+.lobby { background: var(--surface-2); border: 1px dashed var(--accent); border-radius: 8px; padding: 8px 12px; font-size: 14px; }
+.btn.wa { display: inline-flex; align-items: center; text-decoration: none; color: var(--text); border-color: #2b6b3f; background: #12301c; }
+.btn.wa:hover { border-color: #3fa35f; }

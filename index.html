@@ -74,7 +74,11 @@
             <label>Título<input name="title" required minlength="2" maxlength="60" placeholder="Partida privada"></label>
             <label>Fecha y hora (<span class="tz-label"></span>)<input type="datetime-local" name="when" required></label>
           </div>
-          <label>Notas<input name="notes" maxlength="200" placeholder="Modo, reglas, código de lobby…"></label>
+          <label>Notas públicas<input name="notes" maxlength="200" placeholder="Modo, reglas…"></label>
+          <div class="grid-form">
+            <label>🔒 Código del lobby (solo registrados)<input name="lobbyCode" maxlength="60" placeholder="Ej. MNCS-1234"></label>
+            <label>🔒 Enlace privado (Discord, grupo…)<input name="lobbyLink" type="url" maxlength="300" placeholder="https://…"></label>
+          </div>
           <div class="row" style="margin-top:12px">
             <button class="btn primary">Guardar partida</button>
             <button type="button" class="btn" data-act="ev-cancel">Limpiar</button>
