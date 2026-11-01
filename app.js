@@ -144,7 +144,8 @@ setInterval(renderNext, 30e3);
 // ---------- Tabs ----------
 function currentTab() {
   const t = location.hash.slice(1);
-  if (!["inicio", "equipos", "calendario", "ranking", "admin"].includes(t)) return "inicio";
+  if (!["inicio", "perfil", "equipos", "calendario", "ranking", "admin"].includes(t)) return "inicio";
+  if (t === "perfil" && !state.user) return "inicio";
   return t === "admin" && !state.isAdmin ? "inicio" : t;
 }
 function applyTab() {
@@ -277,7 +278,8 @@ function render() {
   $("tab-admin").hidden = !state.isAdmin;
   applyTab();
   renderNext(); renderStats(); renderMe(); renderPointsHelp(); renderMiniRank();
-  renderTeams(); renderPool(); renderCalendar(); renderRanking();
+  renderTeams(); renderPool(); renderCalendar(); renderRanking(); renderMyProfile();
+  $("tab-perfil").hidden = !state.user;
   if (!document.activeElement?.closest?.("[data-form=suggest]")) renderSuggestions();
 }
 
@@ -320,8 +322,26 @@ function eventExtras(e, { showNames = true } = {}) {
       parts.push(`<div class="lobby">🔒 ${lob.code ? `Código: <b>${esc(lob.code)}</b>` : ""}${lob.code && lob.link ? " · " : ""}${lob.link ? `<a href="${esc(lob.link)}" target="_blank" rel="noopener">Abrir enlace</a>` : ""}</div>`);
     } else if (!me()) parts.push(`<p class="muted small">🔒 El código del lobby se ve al registrarte.</p>`);
   }
-  parts.push(`<a class="btn sm wa" href="${shareLink(e)}" target="_blank" rel="noopener">Compartir por WhatsApp</a>`);
+  parts.push(`<div class="row"><a class="btn sm wa" href="${shareLink(e)}" target="_blank" rel="noopener">Compartir por WhatsApp</a>
+    ${e.ms > Date.now() ? `<a class="btn sm" href="${gcalLink(e)}" target="_blank" rel="noopener">📅 Google Calendar</a><button class="btn sm" data-act="ics" data-id="${esc(e.id || "")}">📅 iPhone / Outlook</button>` : ""}</div>`);
   return parts.join("");
+}
+const icsDate = (ms) => new Date(ms).toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+function gcalLink(e) {
+  const q = new URLSearchParams({ action: "TEMPLATE", text: `${SITE.title} · ${e.title}`, dates: `${icsDate(e.ms)}/${icsDate(e.ms + 2 * 3600e3)}`,
+    details: `${e.mode ? e.mode + ". " : ""}${e.notes || ""}\n${siteUrl()}` });
+  return `https://calendar.google.com/calendar/render?${q}`;
+}
+function downloadIcs(id) {
+  const e = id ? { ...state.events.get(id), ms: tsMs(state.events.get(id)?.startsAt) } : nextEvent();
+  if (!e?.ms) return;
+  const txt = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//MNCS//WZ//ES", "BEGIN:VEVENT", `UID:${id || "next"}@mncs`, `DTSTAMP:${icsDate(Date.now())}`,
+    `DTSTART:${icsDate(e.ms)}`, `DTEND:${icsDate(e.ms + 2 * 3600e3)}`, `SUMMARY:${SITE.title} · ${e.title}`.replace(/[,;]/g, " "),
+    `DESCRIPTION:${(e.mode ? e.mode + ". " : "") + (e.notes || "")} ${siteUrl()}`.replace(/[,;\n]/g, " "), `URL:${siteUrl()}`,
+    "BEGIN:VALARM", "TRIGGER:-PT1H", "ACTION:DISPLAY", "DESCRIPTION:Partida en 1 hora", "END:VALARM", "END:VEVENT", "END:VCALENDAR"].join("\r\n");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([txt], { type: "text/calendar" }));
+  a.download = "partida-mncs.ics"; document.body.appendChild(a); a.click(); a.remove();
 }
 function formatLine(e) {
   const bits = [e.mode, e.minPlayers ? `mín. ${e.minPlayers} jugadores` : ""].filter(Boolean);
@@ -373,7 +393,13 @@ function renderMe() {
     el.innerHTML = `<h2>Entra para jugar</h2>
       ${IN_APP ? `<div class="alert" style="margin-bottom:12px"><b>Abre esta página en Chrome o Safari.</b> Estás dentro de otra app (Instagram, Facebook…) y Google no permite iniciar sesión desde ahí. Toca ⋯ y elige <i>Abrir en el navegador</i>, o copia el link.
         <div class="row" style="margin-top:8px"><button class="btn sm" data-act="copy-link">Copiar link</button></div></div>` : ""}
-      <p class="muted">Inicia sesión con tu cuenta de Google para registrarte, sumar puntos y unirte a un equipo.</p>
+      <ol class="steps small">
+        <li><b>Entra</b> con Google, o con correo y contraseña.</li>
+        <li><b>Crea tu perfil:</b> gamertag, Activision ID, plataforma (+${POINTS.register} pts).</li>
+        <li><b>Confirma</b> la próxima partida con <i>Voy</i> y verás el código del lobby 🔒.</li>
+        <li><b>Únete a un equipo</b> de 4 en <i>Equipos</i>, o crea el tuyo.</li>
+        <li>Después de jugar, <b>vota al MVP</b> y suma puntos en el ranking.</li>
+      </ol>
       <button class="btn primary" data-act="login">Entrar con Google</button>
       <details class="help" id="email-login"><summary class="muted small">¿No tienes Google o no te funciona? Entra con correo y contraseña</summary>
         <form data-form="email-login" class="grid-form" style="margin-top:8px">
@@ -441,15 +467,45 @@ function renderMe() {
     </div>
     <div class="badges">${badges}</div>
     ${teamBlock}
-    <details class="refer" style="margin-top:12px"><summary><b>🤝 Invita amigos y gana puntos</b> <span class="muted small">(${s.referrals} invitado${s.referrals === 1 ? "" : "s"}, ${s.recruits} ya jugaron)</span></summary>
-      <p class="small muted">Ganas <b>+${POINTS.referral}</b> por cada amigo que se registre con tu link y juegue su primera partida.</p>
-      <div class="row"><input readonly value="${esc(siteUrl())}?ref=${refCodeOf(p.id)}" style="flex:1;min-width:200px" aria-label="Tu link de invitación">
-        <button class="btn sm" data-act="copy-ref">Copiar</button>
-        <a class="btn sm wa" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(`🎮 Únete a las privadas de Warzone de ${SITE.title}. Regístrate con mi link: ${siteUrl()}?ref=${refCodeOf(p.id)}`)}">WhatsApp</a></div>
-    </details>
-    <details style="margin-top:12px"><summary class="muted">Editar mi perfil</summary>${profileForm(p)}
-      ${!p.teamId ? `<button class="btn sm danger" data-act="delete-me">Borrar mi registro</button>` : ""}
-    </details>`;
+    <div class="row" style="margin-top:12px">
+      <a class="btn sm" href="#perfil">👤 Mi perfil · editar datos</a>
+      <a class="btn sm" href="#perfil">🤝 Invitar amigos (+${POINTS.referral})</a>
+    </div>`;
+}
+
+// ---------- Mi perfil ----------
+function referBlock(p, s) {
+  const link = `${siteUrl()}?ref=${refCodeOf(p.id)}`;
+  return `<div class="panel plain refer-box">
+    <h2>🤝 Invita amigos</h2>
+    <p class="small muted">Ganas <b>+${POINTS.referral}</b> por cada amigo que se registre con tu link y juegue su primera partida. Llevas <b>${s.referrals}</b> invitado${s.referrals === 1 ? "" : "s"}, <b>${s.recruits}</b> ya jugaron.</p>
+    <div class="row"><input readonly value="${esc(link)}" style="flex:1;min-width:200px" aria-label="Tu link de invitación">
+      <button class="btn sm" data-act="copy-ref">Copiar</button>
+      <a class="btn sm wa" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(`🎮 Únete a las privadas de Warzone de ${SITE.title}. Regístrate con mi link: ${link}`)}">WhatsApp</a></div>
+  </div>`;
+}
+function renderMyProfile() {
+  const el = $("my-profile"); if (!el) return;
+  if (el.contains(document.activeElement) && document.activeElement.matches("input, select, textarea")) return;
+  const p = me();
+  if (!state.user) { el.innerHTML = `<div class="empty-note">Entra desde <a href="#inicio">Inicio</a> para ver tu perfil.</div>`; return; }
+  if (!p) { el.innerHTML = `<div class="empty-note">Primero crea tu perfil de jugador en <a href="#inicio">Inicio</a>.</div>`; return; }
+  const s = statsFor(p.id);
+  el.innerHTML = `
+    <div class="panel">${profileBody(p.id, { mine: true })}</div>
+    ${referBlock(p, s)}
+    <div class="panel plain">
+      <h2>✏️ Editar mis datos</h2>
+      ${profileForm(p)}
+    </div>
+    <div class="panel plain">
+      <h2>Cuenta</h2>
+      <p class="small muted">Entraste como <b>${esc(state.user.email)}</b>.</p>
+      <div class="row">
+        <button class="btn sm" data-act="logout">Cerrar sesión</button>
+        ${!p.teamId ? `<button class="btn sm danger" data-act="delete-me">Borrar mi registro</button>` : `<span class="small muted">Para borrar tu registro primero sal de tu equipo.</span>`}
+      </div>
+    </div>`;
 }
 
 function reqRow(r, view) {
@@ -745,8 +801,14 @@ async function closeSeason() {
 }
 
 function openProfile(uid) {
-  const p = state.players.get(uid); if (!p) return;
+  if (!state.players.has(uid)) return;
+  $("profile").innerHTML = `<div class="row" style="justify-content:flex-end"><button class="btn sm" data-act="close-profile" aria-label="Cerrar">✕</button></div>` + profileBody(uid);
+  $("profile").showModal();
+}
+function profileBody(uid, { mine = false } = {}) {
+  const p = state.players.get(uid);
   const s = statsFor(uid);
+  const ss = state.season?.startsAt ? statsFor(uid, seasonStart()) : null;
   const t = p.teamId && state.teams.get(p.teamId);
   const rank = rankedPlayers(0).findIndex((x) => x.p.id === uid) + 1;
   const badges = badgesFor(uid, s).map(([i, n, d]) => `<span class="badge" title="${esc(d)}">${i} ${esc(n)}</span>`).join("");
@@ -755,16 +817,14 @@ function openProfile(uid) {
         s.history.map((h) => `<tr><td>${esc(h.title)}${h.mvp ? " 🌟" : ""}<br><small class="muted">${h.ms ? esc(fmt(h.ms, ADMIN_TZ.id)) : ""}</small></td><td>${esc(h.teamName || "—")}${h.captain ? " ★" : ""}</td><td>${placeLabel(h.place)}</td><td>${h.kills}</td><td>${h.pts}</td></tr>`).join("")
       }</tbody></table></div>`
     : `<p class="muted">Aún sin partidas registradas.</p>`;
-  $("profile").innerHTML = `
-    <div class="row" style="justify-content:space-between;align-items:flex-start">
-      <div><p class="kicker">Perfil de jugador</p><h2>${flag(p.country)} ${esc(p.gamertag)}</h2></div>
-      <button class="btn sm" data-act="close-profile" aria-label="Cerrar">✕</button>
-    </div>
+  return `
+    <div><p class="kicker">${mine ? "Mi perfil" : "Perfil de jugador"}</p><h2>${flag(p.country)} ${esc(p.gamertag)}</h2></div>
     <p class="muted small">${[countryName(p.country), p.platform, p.role, p.activisionId, p.mic ? "🎙️ micro" : "sin micro"].filter(Boolean).map(esc).join(" · ")}</p>
     ${p.trackerUrl ? `<p><a class="btn sm" href="${esc(p.trackerUrl)}" target="_blank" rel="noopener">📊 Ver stats en su tracker</a></p>` : ""}
     <p>${t ? `Equipo: <b>${esc(t.name)}</b>${t.captainUid === uid ? " (capitán)" : ""}` : `<span class="muted">En el pool</span>`}</p>
     <div class="stats">
-      <div class="stat"><b>${s.points}</b><span>puntos</span></div>
+      <div class="stat"><b>${s.points}</b><span>puntos totales</span></div>
+      ${ss ? `<div class="stat"><b>${ss.points}</b><span>${esc(state.season.name || "temporada")}</span></div>` : ""}
       <div class="stat"><b>#${rank}</b><span>ranking</span></div>
       <div class="stat"><b>${s.games}</b><span>partidas</span></div>
       <div class="stat"><b>${s.kills}</b><span>kills</span></div>
@@ -776,7 +836,6 @@ function openProfile(uid) {
     <div class="badges" style="margin:14px 0">${badges}</div>
     <h3 style="margin:8px 0">Historial</h3>
     ${hist}`;
-  $("profile").showModal();
 }
 
 // ---------- Admin ----------
@@ -1390,7 +1449,7 @@ document.addEventListener("click", (e) => {
     vote: () => vote(id), "sugg-del": () => deleteSuggestion(id), "sugg-schedule": () => scheduleSuggestion(id),
     "email-signin": emailSignIn, "email-signup": emailSignUp, "email-reset": emailReset, "email-verify": resendVerify,
     "email-refresh": async () => { try { await auth.currentUser.reload(); await auth.currentUser.getIdToken(true); } catch {} location.reload(); },
-    "copy-ref": copyRef, "proof-pick": () => pickProof(b.dataset.event, team), "proof-view": () => viewProofs(id), "proof-del": () => deleteProof(id),
+    "copy-ref": copyRef, ics: () => downloadIcs(id), "proof-pick": () => pickProof(b.dataset.event, team), "proof-view": () => viewProofs(id), "proof-del": () => deleteProof(id),
     "rank-mode": () => { state.rankMode = id; renderRanking(); }, "season-close": closeSeason
   })[act]?.();
 });

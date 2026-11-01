@@ -391,14 +391,38 @@ with sync_playwright() as pw:
     igp = ig.new_page(); igp.goto(BASE); igp.wait_for_selector("#me h2")
     check("aviso de Instagram para abrir en Chrome/Safari", "Abre esta página en Chrome o Safari" in igp.locator("#me").inner_text())
 
-    # ---------- Salir del equipo / borrar perfil ----------
+    # ---------- Mi perfil ----------
+    check("pestaña Mi perfil visible al entrar", pb.locator("#tab-perfil").is_visible() and guest.locator("#tab-perfil").is_hidden())
+    tab(pb, "perfil"); pb.wait_for_timeout(200)
+    txt = pb.locator("#my-profile").inner_text()
+    check("Mi perfil muestra datos, invitación y edición", "Bravo" in txt and "Invita amigos".lower() in txt.lower() and "Editar mis datos".lower() in txt.lower())
+    pb.select_option("#my-profile select[name=role]", "Francotirador")
+    pb.fill("#my-profile input[name=gamertag]", "BravoSix")
+    pb.click("#my-profile [data-form=profile] button.primary")
+    wait_toast(pb, "Perfil actualizado")
+    d = db(pb)
+    check("editar perfil cambia rol y gamertag", d["players"][PB["uid"]]["role"] == "Francotirador" and d["players"][PB["uid"]]["gamertag"] == "BravoSix")
+    check("cambio de gamertag mueve el nombre reservado", d["handles"].get("g_bravosix") == {"uid": PB["uid"]} and "g_bravo" not in d["handles"])
+    tab(pa, "inicio"); pa.wait_for_timeout(200)
+    check("Inicio enlaza a Mi perfil", pa.locator("#me a[href='#perfil']").count() >= 1)
+
+    # ---------- Calendario personal ----------
+    check("botón Google Calendar en la próxima partida", "calendar.google.com" in (pa.locator("#next a[href*='calendar.google.com']").first.get_attribute("href") or ""))
+    with pa.expect_download() as dl:
+        pa.click("#next [data-act=ics]")
+    ics = open(dl.value.path()).read()
+    check("descarga .ics con recordatorio", "BEGIN:VEVENT" in ics and "TRIGGER:-PT1H" in ics)
+
+    # ---------- Borrar perfil ----------
     pc.answers = [True]
-    tab(pc, "inicio"); pc.wait_for_timeout(200)
-    pc.click("#me details summary >> nth=1") if pc.locator("#me details summary").count() > 1 else None
-    pc.click("[data-act=delete-me]")
+    tab(pc, "perfil"); pc.wait_for_timeout(200)
+    pc.click("#my-profile [data-act=delete-me]")
     wait_toast(pc, "Registro borrado")
     d = db(pc)
     check("perfil borrado libera su gamertag", PC["uid"] not in d["players"] and "g_charlie" not in d.get("handles", {}))
+
+    # ---------- Visitante: pasos ----------
+    check("visitante ve '¿cómo empiezo?'", guest.locator("#me ol.steps li").count() == 5)
 
     owner.screenshot(path="/tmp/claude-0/-home-claude/6898851d-8b89-583f-adbb-0dc9105785d4/scratchpad/owner.png", full_page=True)
     pa.screenshot(path="/tmp/claude-0/-home-claude/6898851d-8b89-583f-adbb-0dc9105785d4/scratchpad/playerA.png", full_page=True)

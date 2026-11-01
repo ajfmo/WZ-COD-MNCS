@@ -227,3 +227,9 @@ small.ok { color: var(--ok); }
 
 .next-extras .progress, .event .progress { width: 100%; }
 .sugg .who b { white-space: normal; }
+
+/* ---------- v8: mi perfil ---------- */
+.my-profile { display: grid; gap: 16px; }
+.my-profile .panel h2 { margin-bottom: 8px; }
+.steps { margin: 4px 0 14px; padding-left: 20px; display: grid; gap: 4px; color: var(--muted); }
+.steps b { color: var(--text); }

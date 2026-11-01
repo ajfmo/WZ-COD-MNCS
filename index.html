@@ -8,6 +8,12 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
+  <link rel="manifest" href="manifest.webmanifest">
+  <meta name="theme-color" content="#0d0f0c">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <link rel="icon" href="icon-192.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="MNCS">
 </head>
 <body>
   <div id="announcement" class="announce" role="status" hidden></div>
@@ -23,6 +29,7 @@
   <nav class="tabs" aria-label="Secciones">
     <div class="wrap tabs-inner">
       <a href="#inicio" data-tab="inicio">Inicio</a>
+      <a href="#perfil" data-tab="perfil" id="tab-perfil" hidden>Mi perfil</a>
       <a href="#equipos" data-tab="equipos">Equipos</a>
       <a href="#calendario" data-tab="calendario">Calendario</a>
       <a href="#ranking" data-tab="ranking">Ranking</a>
@@ -44,6 +51,10 @@
           <a href="#ranking" class="small">Ver ranking completo →</a>
         </div>
       </div>
+    </section>
+
+    <section data-view="perfil" hidden>
+      <div id="my-profile" class="my-profile"></div>
     </section>
 
     <section data-view="equipos" hidden>
