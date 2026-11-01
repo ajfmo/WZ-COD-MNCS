@@ -1,0 +1,164 @@
+rules_version = '2';
+
+// Reglas de seguridad para la app de equipos de Warzone.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Dueño: único que nombra o quita admins. Cámbialo aquí y en config.js (OWNER_EMAIL).
+    function isOwner() {
+      return request.auth != null && request.auth.token.email == 'aflores@sforce.tech';
+    }
+
+    function isAdmin() {
+      return isOwner()
+        || (request.auth != null && request.auth.token.email is string
+            && exists(/databases/$(database)/documents/admins/$(request.auth.token.email.lower())));
+    }
+
+    function playerPath(uid) { return /databases/$(database)/documents/players/$(uid); }
+    function teamPath(tid)   { return /databases/$(database)/documents/teams/$(tid); }
+
+    function validProfile(d) {
+      return d.gamertag is string && d.gamertag.size() >= 2 && d.gamertag.size() <= 24
+        && d.activisionId is string && d.activisionId.size() <= 40
+        && d.platform in ['PC', 'PlayStation', 'Xbox']
+        && d.mic is bool;
+    }
+
+    function validName(n) {
+      return n is string && n.size() >= 2 && n.size() <= 30;
+    }
+
+    // ---------- JUGADORES ----------
+    match /players/{uid} {
+      allow read: if true;
+
+      allow create: if request.auth != null && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['gamertag', 'activisionId', 'platform', 'mic', 'teamId', 'createdAt', 'updatedAt'])
+        && request.resource.data.teamId == null
+        && validProfile(request.resource.data);
+
+      allow update: if profileEdit(uid)
+        || (teamIdOnly() && (joining(uid) || leaving(uid)))
+        || isAdmin();
+
+      allow delete: if (request.auth != null && request.auth.uid == uid && resource.data.teamId == null)
+        || isAdmin();
+
+      function profileEdit(uid) {
+        return request.auth != null && request.auth.uid == uid
+          && request.resource.data.diff(resource.data).affectedKeys()
+               .hasOnly(['gamertag', 'activisionId', 'platform', 'mic', 'updatedAt'])
+          && validProfile(request.resource.data);
+      }
+
+      function teamIdOnly() {
+        return request.auth != null
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['teamId']);
+      }
+
+      // Un jugador libre entra a un equipo: lo hace el capitán de ese equipo
+      // (o el propio jugador al crear su equipo, porque queda como capitán).
+      function joining(uid) {
+        let t = request.resource.data.teamId;
+        return resource.data.teamId == null
+          && t is string
+          && getAfter(teamPath(t)).data.captainUid == request.auth.uid
+          && uid in getAfter(teamPath(t)).data.members;
+      }
+
+      // Un jugador sale de su equipo: lo hace él mismo o su capitán.
+      function leaving(uid) {
+        let old = resource.data.teamId;
+        return old != null
+          && request.resource.data.teamId == null
+          && (request.auth.uid == uid || get(teamPath(old)).data.captainUid == request.auth.uid)
+          && (!existsAfter(teamPath(old)) || !(uid in getAfter(teamPath(old)).data.members));
+      }
+    }
+
+    // ---------- EQUIPOS ----------
+    match /teams/{tid} {
+      allow read: if true;
+
+      allow create: if request.auth != null
+        && request.resource.data.keys().hasOnly(['name', 'captainUid', 'members', 'createdAt'])
+        && request.resource.data.captainUid == request.auth.uid
+        && request.resource.data.members == [request.auth.uid]
+        && validName(request.resource.data.name)
+        && get(playerPath(request.auth.uid)).data.teamId == null
+        && getAfter(playerPath(request.auth.uid)).data.teamId == tid;
+
+      allow update: if (isCaptain() && captainEdit(tid))
+        || memberLeave()
+        || isAdmin();
+
+      allow delete: if (isCaptain() && freed(0) && freed(1) && freed(2) && freed(3))
+        || isAdmin();
+
+      function isCaptain() {
+        return request.auth != null && resource.data.captainUid == request.auth.uid;
+      }
+
+      // El capitán cambia nombre, agrega/quita UN jugador por operación o cede la capitanía.
+      function captainEdit(tid) {
+        let d = request.resource.data;
+        let added = d.members.removeAll(resource.data.members);
+        let removed = resource.data.members.removeAll(d.members);
+        return d.diff(resource.data).affectedKeys().hasOnly(['name', 'members', 'captainUid'])
+          && validName(d.name)
+          && d.members is list
+          && d.members.size() >= 1 && d.members.size() <= 4
+          && d.members.toSet().size() == d.members.size()
+          && d.captainUid in d.members
+          && added.size() + removed.size() <= 1
+          && (added.size() == 0
+              || (get(playerPath(added[0])).data.teamId == null
+                  && getAfter(playerPath(added[0])).data.teamId == tid))
+          && (removed.size() == 0
+              || getAfter(playerPath(removed[0])).data.teamId == null);
+      }
+
+      // Un miembro (no capitán) se sale por su cuenta.
+      function memberLeave() {
+        return request.auth != null
+          && request.auth.uid in resource.data.members
+          && request.auth.uid != resource.data.captainUid
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['members'])
+          && request.resource.data.members == resource.data.members.removeAll([request.auth.uid])
+          && getAfter(playerPath(request.auth.uid)).data.teamId == null;
+      }
+
+      // Para disolver el equipo, todos sus miembros deben quedar libres en la misma operación.
+      function freed(i) {
+        let m = resource.data.members;
+        return m.size() <= i || getAfter(playerPath(m[i])).data.teamId == null;
+      }
+    }
+
+    // ---------- ADMINS (id del documento = correo en minúsculas) ----------
+    match /admins/{email} {
+      allow read: if request.auth != null
+        && (request.auth.token.email.lower() == email || isAdmin());
+      allow create, update: if isOwner()
+        && request.resource.data.keys().hasOnly(['addedAt', 'addedBy']);
+      allow delete: if isOwner();
+    }
+
+    // ---------- CALENDARIO ----------
+    match /events/{id} {
+      allow read: if true;
+      allow create, update: if isAdmin()
+        && request.resource.data.title is string
+        && request.resource.data.title.size() >= 2 && request.resource.data.title.size() <= 60
+        && request.resource.data.startsAt is timestamp;
+      allow delete: if isAdmin();
+    }
+
+    // ---------- RESULTADOS POR PARTIDA (id = id del evento) ----------
+    match /results/{eventId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+  }
+}

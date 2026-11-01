@@ -1,48 +1,28 @@
-# Warzone · Equipos
+# CoD WZ · MNCS
 
-Página para organizar partidas privadas: los jugadores entran con Google, se registran, los capitanes crean y editan su equipo de 4, y quien no tiene equipo queda en el pool de agentes libres. Todo se actualiza en vivo para todos.
+Página para organizar partidas privadas de Warzone: registro con Google, equipos de 4 con capitán, pool de agentes libres, calendario editable, puntos, ranking y perfiles con estadísticas por partida.
 
-- **Hosting:** GitHub Pages (gratis)
-- **Datos y login:** Firebase (plan gratuito Spark, sobra para esto)
+- **Hosting:** GitHub Pages
+- **Datos y login:** Firebase (Auth con Google + Firestore)
 
-## Qué puede hacer cada quien
+## Roles
 
-| Quién | Puede |
+| Rol | Puede |
 |---|---|
-| Cualquiera con el link | Ver equipos y pool (sin iniciar sesión) |
-| Jugador registrado | Editar su perfil, crear un equipo, salir de su equipo, borrar su registro |
-| Capitán | Renombrar, agregar jugadores del pool, quitar miembros, ceder capitanía (★), disolver (si está solo) |
-| Organizador (tu correo) | Todo lo anterior en cualquier equipo + borrar jugadores |
+| Visitante | Ver todo (equipos, pool, calendario, ranking, perfiles) |
+| Jugador | Registrarse, editar su perfil, crear equipo, salir de su equipo |
+| Capitán | Renombrar, agregar del pool, quitar miembros, ceder capitanía, disolver |
+| Admin | Crear/editar/borrar partidas, cargar resultados, gestionar cualquier equipo o jugador |
+| Dueño | Todo lo de admin + nombrar y quitar admins |
 
-Las reglas de `firestore.rules` hacen cumplir esto en el servidor: nadie puede editar el equipo de otro, ni meter a alguien que ya tiene equipo, ni pasar de 4.
+El dueño se define en `config.js` (`OWNER_EMAIL`) y en las reglas de Firestore. Los admins se guardan en la colección `admins` (id = correo).
 
-## Configuración (≈15 min, una sola vez)
+## Puntos
 
-### 1. Firebase
-1. Entra a https://console.firebase.google.com → **Agregar proyecto** (Analytics no hace falta).
-2. **Compilación → Authentication → Comenzar →** activa el proveedor **Google**.
-3. **Compilación → Firestore Database → Crear base de datos** → modo producción, cualquier región.
-4. En Firestore → pestaña **Reglas**: pega el contenido de `firestore.rules`, cambia `TU-CORREO@gmail.com` por tu correo y **Publicar**.
-5. **Configuración del proyecto (⚙️) → Tus apps → Web (`</>`)** → registra la app y copia el objeto `firebaseConfig`.
+Se configuran en `config.js` (`POINTS`). Por defecto: registro +10, estar en equipo +5, capitán +5, asistir +10, cada kill +2, equipo 1º/2º/3º +50/+30/+20, más un bonus manual por jugador.
 
-### 2. Edita `config.js`
-- Pega tu `firebaseConfig`.
-- Cambia fecha, hora y notas del evento en `EVENT`.
-- Pon tu correo en `ADMIN_EMAILS` (el mismo de las reglas).
+Las estadísticas por partida (asistencia, kills, posición) las cargan los admins en la pestaña **Admin → Resultados**. No hay API pública de Activision para traerlas automáticamente.
 
-### 3. GitHub Pages
-1. Crea un repo nuevo en GitHub y sube estos archivos a la raíz.
-2. Repo → **Settings → Pages →** Source: *Deploy from a branch*, Branch: `main` / `(root)` → Save.
-3. Tu página queda en `https://TU-USUARIO.github.io/NOMBRE-REPO/`.
+## Reglas de Firestore
 
-### 4. Autoriza el dominio en Firebase
-Authentication → **Configuración → Dominios autorizados → Agregar dominio** → `TU-USUARIO.github.io`.
-Sin este paso el login con Google falla.
-
-Listo: comparte el link.
-
-## Notas
-- La config de Firebase en `config.js` **no es secreta**; lo que protege los datos son las reglas de Firestore.
-- El Activision ID y el gamertag de cada jugador son visibles para todos (para poder invitarse en el juego). El correo no se guarda ni se muestra.
-- Para un nuevo evento: cambia `EVENT` en `config.js`. Si quieres empezar de cero, borra las colecciones `players` y `teams` en la consola de Firestore.
-- Tamaño de equipo: `TEAM_SIZE` en `config.js` es solo visual; el límite real (4) está en `firestore.rules` (`d.members.size() <= 4`). Si lo cambias, cámbialo en ambos.
+`firestore.rules` contiene las reglas: pégalas en Firebase → Firestore → Reglas → Publicar cada vez que cambien.

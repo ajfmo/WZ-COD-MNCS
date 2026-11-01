@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Warzone · Equipos</title>
+  <title>CoD WZ · MNCS</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
@@ -12,39 +12,98 @@
 <body>
   <header class="hero">
     <div class="wrap">
-      <p class="kicker">Lobby privado</p>
-      <h1 id="ev-title">Warzone</h1>
-      <p class="when"><span id="ev-date"></span> · <span id="ev-time"></span></p>
-      <p class="notes" id="ev-notes"></p>
+      <p class="kicker" id="site-sub"></p>
+      <h1 id="site-title">Warzone</h1>
+      <div id="next" class="next"></div>
       <div class="stats" id="stats"></div>
     </div>
   </header>
 
-  <main class="wrap">
-    <section id="me" class="panel" aria-live="polite"></section>
+  <nav class="tabs" aria-label="Secciones">
+    <div class="wrap tabs-inner">
+      <a href="#inicio" data-tab="inicio">Inicio</a>
+      <a href="#equipos" data-tab="equipos">Equipos</a>
+      <a href="#calendario" data-tab="calendario">Calendario</a>
+      <a href="#ranking" data-tab="ranking">Ranking</a>
+      <a href="#admin" data-tab="admin" id="tab-admin" hidden>Admin</a>
+    </div>
+  </nav>
 
-    <section>
-      <div class="sec-head">
-        <h2>Equipos</h2>
-        <span class="muted" id="teams-count"></span>
+  <main class="wrap">
+    <section data-view="inicio">
+      <div id="me" class="panel" aria-live="polite"></div>
+      <div class="card-grid" style="margin-top:20px">
+        <div class="panel plain">
+          <h2>Cómo sumar puntos</h2>
+          <ul class="pts" id="points-help"></ul>
+        </div>
+        <div class="panel plain">
+          <h2>Top 5</h2>
+          <ol class="mini-rank" id="mini-rank"></ol>
+          <a href="#ranking" class="small">Ver ranking completo →</a>
+        </div>
       </div>
-      <div id="teams" class="teams"></div>
     </section>
 
-    <section>
-      <div class="sec-head">
-        <h2>Pool de agentes libres</h2>
-        <span class="muted" id="pool-count"></span>
-      </div>
-      <p class="muted small">Jugadores registrados sin equipo. Los capitanes con plazas libres pueden agregarlos.</p>
+    <section data-view="equipos" hidden>
+      <div class="sec-head"><h2>Equipos</h2><span class="muted" id="teams-count"></span></div>
+      <div id="teams" class="teams"></div>
+      <div class="sec-head" style="margin-top:28px"><h2>Pool de agentes libres</h2><span class="muted" id="pool-count"></span></div>
+      <p class="muted small">Jugadores sin equipo. Los capitanes con plazas libres pueden agregarlos.</p>
       <div id="pool" class="pool"></div>
+    </section>
+
+    <section data-view="calendario" hidden>
+      <div class="sec-head"><h2>Próximas partidas</h2></div>
+      <div id="upcoming" class="events"></div>
+      <div class="sec-head" style="margin-top:28px"><h2>Partidas jugadas</h2></div>
+      <div id="past" class="events"></div>
+    </section>
+
+    <section data-view="ranking" hidden>
+      <div class="sec-head"><h2>Ranking</h2><span class="muted small">Toca un jugador para ver su perfil</span></div>
+      <div class="table-wrap"><table class="rank" id="rank"></table></div>
+    </section>
+
+    <section data-view="admin" hidden>
+      <div class="panel">
+        <h2 id="ev-form-title">Nueva partida</h2>
+        <form data-form="event" id="ev-form">
+          <input type="hidden" name="id">
+          <div class="grid-form">
+            <label>Título<input name="title" required minlength="2" maxlength="60" placeholder="Partida privada"></label>
+            <label>Fecha y hora (<span class="tz-label"></span>)<input type="datetime-local" name="when" required></label>
+          </div>
+          <label>Notas<input name="notes" maxlength="200" placeholder="Modo, reglas, código de lobby…"></label>
+          <div class="row" style="margin-top:12px">
+            <button class="btn primary">Guardar partida</button>
+            <button type="button" class="btn" data-act="ev-cancel">Limpiar</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="panel" style="margin-top:20px">
+        <h2>Resultados de una partida</h2>
+        <p class="muted small">Marca asistencia, kills y la posición de cada equipo. Los puntos se calculan solos.</p>
+        <div class="row"><select id="res-event" style="flex:1;min-width:220px"></select></div>
+        <div id="res-form"></div>
+      </div>
+
+      <div class="panel" style="margin-top:20px" id="admins-panel" hidden>
+        <h2>Admins</h2>
+        <p class="muted small">Los admins pueden editar el calendario, cargar resultados y gestionar equipos y jugadores. Solo tú puedes nombrarlos.</p>
+        <form data-form="admin" class="row">
+          <input type="email" name="email" required placeholder="correo@ejemplo.com" style="flex:1;min-width:220px">
+          <button class="btn primary">Hacer admin</button>
+        </form>
+        <ul class="admin-list" id="admins"></ul>
+      </div>
     </section>
   </main>
 
+  <dialog id="profile" class="profile"></dialog>
   <footer class="wrap muted small">Datos en vivo · se actualiza solo</footer>
-
   <div id="toast" class="toast" role="status"></div>
-
   <script type="module" src="app.js"></script>
 </body>
 </html>
