@@ -39,5 +39,21 @@ export const POINTS = {
   captain: 5,       // por ser capitán en una partida (se guarda al cerrar la partida)
   attended: 10,     // por asistir a una partida
   perKill: 2,       // por cada kill
-  place: { 1: 50, 2: 30, 3: 20 } // por posición del equipo en la partida
+  place: { 1: 50, 2: 30, 3: 20 }, // por posición del equipo en la partida
+  mvp: 25,          // por ser elegido MVP por los que jugaron
+  streak: 5,        // por cada partida jugada estando en racha (3+ seguidas)
+  referral: 15      // por cada amigo invitado que juega su primera partida
 };
+
+// Días que dura abierta la votación de MVP después de cada partida
+export const MVP_DAYS = 7;
+
+export const MODES = ["BR Cuartetos", "BR Tríos", "BR Dúos", "Resurgimiento", "Mini Royale", "Botín (Plunder)", "Personalizado"];
+export const ROLES = ["Asalto", "Francotirador", "Apoyo", "Flex", "Líder (IGL)"];
+export const COUNTRIES = [
+  ["VE", "Venezuela"], ["CO", "Colombia"], ["MX", "México"], ["AR", "Argentina"], ["CL", "Chile"], ["PE", "Perú"],
+  ["EC", "Ecuador"], ["BO", "Bolivia"], ["PY", "Paraguay"], ["UY", "Uruguay"], ["PA", "Panamá"], ["CR", "Costa Rica"],
+  ["DO", "República Dominicana"], ["PR", "Puerto Rico"], ["CU", "Cuba"], ["GT", "Guatemala"], ["HN", "Honduras"],
+  ["SV", "El Salvador"], ["NI", "Nicaragua"], ["US", "Estados Unidos"], ["CA", "Canadá"], ["BR", "Brasil"],
+  ["ES", "España"], ["PT", "Portugal"], ["IT", "Italia"], ["FR", "Francia"], ["DE", "Alemania"], ["GB", "Reino Unido"]
+];

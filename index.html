@@ -68,7 +68,10 @@
 
     <section data-view="ranking" hidden>
       <div class="sec-head"><h2>Ranking</h2><span class="muted small">Toca un jugador para ver su perfil</span></div>
+      <div class="row rank-controls" id="rank-controls"></div>
       <div class="table-wrap"><table class="rank" id="rank"></table></div>
+      <div class="sec-head" style="margin-top:28px"><h2>🏛️ Salón de la fama</h2></div>
+      <div id="hall" class="hall"></div>
     </section>
 
     <section data-view="admin" hidden>
@@ -80,7 +83,11 @@
             <label>Título<input name="title" required minlength="2" maxlength="60" placeholder="Partida privada"></label>
             <label>Fecha y hora (<span class="tz-label"></span>)<input type="datetime-local" name="when" required></label>
           </div>
-          <label>Notas públicas<input name="notes" maxlength="200" placeholder="Modo, reglas…"></label>
+          <div class="grid-form">
+            <label>Modo<select name="mode"><option value="">—</option></select></label>
+            <label>Mínimo de jugadores para iniciar<input type="number" name="minPlayers" min="0" max="200" placeholder="Ej. 24 o 50"></label>
+          </div>
+          <label>Notas públicas<input name="notes" maxlength="200" placeholder="Reglas, armas prohibidas…"></label>
           <div class="grid-form">
             <label>🔒 Código del lobby (solo registrados)<input name="lobbyCode" maxlength="60" placeholder="Ej. MNCS-1234"></label>
             <label>🔒 Enlace privado (Discord, grupo…)<input name="lobbyLink" type="url" maxlength="300" placeholder="https://…"></label>
@@ -116,6 +123,21 @@
       </div>
 
       <div class="panel" style="margin-top:20px">
+        <h2>Temporada</h2>
+        <p class="muted small" id="season-info"></p>
+        <form data-form="season" id="season-form">
+          <div class="grid-form">
+            <label>Nombre<input name="name" maxlength="40" placeholder="Temporada 1"></label>
+            <label>Inicio (<span class="tz-label"></span>)<input type="datetime-local" name="start"></label>
+          </div>
+          <div class="row" style="margin-top:10px">
+            <button class="btn primary">Guardar temporada</button>
+            <button type="button" class="btn" data-act="season-close">Cerrar temporada y premiar</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="panel" style="margin-top:20px">
         <h2>Posibles duplicados</h2>
         <p class="muted small">Jugadores con gamertag o Activision ID muy parecidos. Revisa y borra el que sobre (solo si no está en un equipo).</p>
         <div id="dupes" class="dupes"></div>
@@ -123,7 +145,8 @@
 
       <div class="panel" style="margin-top:20px" id="admins-panel" hidden>
         <h2>Admins</h2>
-        <p class="muted small">Los admins pueden editar el calendario, cargar resultados y gestionar equipos y jugadores. Solo tú puedes nombrarlos.</p>
+        <p class="muted small">Los admins pueden editar el calendario, cargar resultados y gestionar equipos y jugadores. Solo tú puedes nombrarlos.
+          <b>No se envía correo:</b> la persona debe entrar a la página con exactamente ese correo (Google, o correo verificado). Usa "Invitar" para mandarle las instrucciones por WhatsApp.</p>
         <form data-form="admin" class="row">
           <input type="email" name="email" required placeholder="correo@ejemplo.com" style="flex:1;min-width:220px">
           <button class="btn primary">Hacer admin</button>

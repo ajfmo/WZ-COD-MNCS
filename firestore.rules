@@ -7,7 +7,7 @@ service cloud.firestore {
     // Dueño: único que nombra o quita admins. Cámbialo aquí y en config.js (OWNER_EMAIL).
     function isOwner() {
       return request.auth != null && request.auth.token.email_verified == true
-        && request.auth.token.email == 'aflores@sforce.tech';
+        && request.auth.token.email.lower() == 'aflores@sforce.tech';
     }
 
     function isAdmin() {
@@ -31,7 +31,9 @@ service cloud.firestore {
         && d.platform in ['PC', 'PlayStation', 'Xbox']
         && d.mic is bool
         && (!('trackerUrl' in d) || (d.trackerUrl is string && d.trackerUrl.size() <= 200
-            && (d.trackerUrl == '' || d.trackerUrl.matches('https://.*'))));
+            && (d.trackerUrl == '' || d.trackerUrl.matches('https://.*'))))
+        && (!('country' in d) || (d.country is string && d.country.matches('([A-Z]{2})?')))
+        && (!('role' in d) || (d.role is string && d.role.size() <= 30));
     }
 
     function isPlayer() {
@@ -47,8 +49,13 @@ service cloud.firestore {
       allow read: if true;
 
       allow create: if request.auth != null && request.auth.uid == uid
-        && request.resource.data.keys().hasOnly(['gamertag', 'activisionId', 'platform', 'mic', 'trackerUrl', 'teamId', 'createdAt', 'updatedAt'])
+        && request.resource.data.keys().hasOnly(['gamertag', 'activisionId', 'platform', 'mic', 'trackerUrl', 'country', 'role', 'referredBy', 'teamId', 'createdAt', 'updatedAt'])
+        // Referido: solo al crear, por otro jugador que existe.
+        && (!('referredBy' in request.resource.data)
+            || (request.resource.data.referredBy is string && request.resource.data.referredBy != uid
+                && exists(playerPath(request.resource.data.referredBy))))
         && request.resource.data.teamId == null
+        && request.resource.data.createdAt == request.time
         && validProfile(request.resource.data)
         // Gamertag y Activision ID únicos: hay que reservarlos en /handles en el mismo batch.
         && ownsHandle('g_' + request.resource.data.gamertag.lower(), uid)
@@ -66,7 +73,7 @@ service cloud.firestore {
       function profileEdit(uid) {
         return request.auth != null && request.auth.uid == uid
           && request.resource.data.diff(resource.data).affectedKeys()
-               .hasOnly(['gamertag', 'activisionId', 'platform', 'mic', 'trackerUrl', 'updatedAt'])
+               .hasOnly(['gamertag', 'activisionId', 'platform', 'mic', 'trackerUrl', 'country', 'role', 'updatedAt'])
           && validProfile(request.resource.data)
           && (request.resource.data.gamertag.lower() == resource.data.gamertag.lower()
               || ownsHandle('g_' + request.resource.data.gamertag.lower(), uid))
@@ -196,7 +203,11 @@ service cloud.firestore {
       allow read: if request.auth != null
         && (request.auth.token.email.lower() == email || isAdmin());
       allow create, update: if isOwner()
-        && request.resource.data.keys().hasOnly(['addedAt', 'addedBy']);
+        && request.resource.data.keys().hasOnly(['addedAt', 'addedBy', 'lastSeen']);
+      // El admin invitado marca que ya entró (solo ese campo).
+      allow update: if request.auth != null && request.auth.token.email_verified == true
+        && request.auth.token.email.lower() == email
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastSeen']);
       allow delete: if isOwner();
     }
 
@@ -244,9 +255,9 @@ service cloud.firestore {
                 && get(teamPath(request.resource.data.teamId)).data.captainUid == request.auth.uid));
       allow delete: if request.auth != null
         && (resource.data.uid == request.auth.uid
+            || isAdmin()
             || (exists(teamPath(resource.data.teamId))
-                && get(teamPath(resource.data.teamId)).data.captainUid == request.auth.uid)
-            || isAdmin());
+                && get(teamPath(resource.data.teamId)).data.captainUid == request.auth.uid));
     }
 
     // ---------- ANUNCIO Y AJUSTES ----------
@@ -273,6 +284,45 @@ service cloud.firestore {
               && request.auth.uid in resource.data.votes))
         || isAdmin();
       allow delete: if (request.auth != null && resource.data.uid == request.auth.uid) || isAdmin();
+    }
+
+    // ---------- VOTOS MVP (id = eventId_uid): solo quien jugó, por otro que jugó ----------
+    match /mvpvotes/{rid} {
+      allow read: if true;
+      allow create: if request.auth != null
+        && request.resource.data.keys().hasOnly(['eventId', 'uid', 'votedFor', 'at'])
+        && request.resource.data.uid == request.auth.uid
+        && rid == request.resource.data.eventId + '_' + request.auth.uid
+        && request.resource.data.votedFor is string
+        && request.resource.data.votedFor != request.auth.uid
+        && get(/databases/$(database)/documents/results/$(request.resource.data.eventId)).data.players[request.auth.uid].attended == true
+        && get(/databases/$(database)/documents/results/$(request.resource.data.eventId)).data.players[request.resource.data.votedFor].attended == true
+        && request.time < get(/databases/$(database)/documents/events/$(request.resource.data.eventId)).data.startsAt + duration.value(7, 'd');
+      allow delete: if isAdmin();
+    }
+
+    // ---------- FOTOS DEL MARCADOR (id = eventId_teamId) ----------
+    match /proofs/{pid} {
+      allow read: if true;
+      allow create, update: if request.auth != null
+        && request.resource.data.keys().hasOnly(['eventId', 'teamId', 'image', 'by', 'at'])
+        && pid == request.resource.data.eventId + '_' + request.resource.data.teamId
+        && request.resource.data.by == request.auth.uid
+        && request.resource.data.image is string && request.resource.data.image.size() < 1000000
+        && exists(/databases/$(database)/documents/events/$(request.resource.data.eventId))
+        && (isAdmin()
+            // capitán del equipo actual
+            || get(teamPath(request.resource.data.teamId)).data.captainUid == request.auth.uid
+            // o capitán de ese equipo según los resultados guardados de la partida
+            || (get(/databases/$(database)/documents/results/$(request.resource.data.eventId)).data.players[request.auth.uid].captain == true
+                && get(/databases/$(database)/documents/results/$(request.resource.data.eventId)).data.players[request.auth.uid].teamId == request.resource.data.teamId));
+      allow delete: if isAdmin();
+    }
+
+    // ---------- TEMPORADAS (salón de la fama) ----------
+    match /seasons/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
     }
 
     // ---------- RESULTADOS POR PARTIDA (id = id del evento) ----------

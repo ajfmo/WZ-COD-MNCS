@@ -1,13 +1,15 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import {
-  getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, signOut, onAuthStateChanged
+  getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, signOut, onAuthStateChanged,
+  createUserWithEmailAndPassword, signInWithEmailAndPassword, sendEmailVerification, sendPasswordResetEmail
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import {
   getFirestore, collection, doc, onSnapshot, writeBatch, setDoc, updateDoc, deleteDoc, addDoc,
-  serverTimestamp, arrayUnion, arrayRemove, Timestamp
+  serverTimestamp, arrayUnion, arrayRemove, Timestamp, getDocs, query, where
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import {
-  firebaseConfig, SITE, OWNER_EMAIL, ADMIN_TZ, FALLBACK_EVENT, TEAM_SIZE, PLATFORMS, POINTS
+  firebaseConfig, SITE, OWNER_EMAIL, ADMIN_TZ, FALLBACK_EVENT, TEAM_SIZE, PLATFORMS, POINTS,
+  COUNTRIES, ROLES, MODES, MVP_DAYS
 } from "./config.js";
 
 const $ = (id) => document.getElementById(id);
@@ -27,9 +29,10 @@ const state = {
   user: null, isAdmin: false,
   players: new Map(), teams: new Map(), events: new Map(), results: new Map(), admins: [],
   rsvps: new Map(), lobby: new Map(), suggestions: [], announcement: null, joinreqs: [], handles: new Map(),
+  mvpvotes: new Map(), season: null, seasons: [], rankMode: "season", rankCountry: "",
   loaded: { players: false, teams: false, events: false }
 };
-let unsubAdminDoc = null, unsubAdmins = null, unsubLobby = null, unsubReqs = null;
+let unsubAdminDoc = null, unsubAdmins = null, unsubLobby = null, unsubReqs = null, pingedAdmin = false, metaCache = null;
 
 const playerRef = (uid) => doc(db, "players", uid);
 const teamRef = (tid) => doc(db, "teams", tid);
@@ -37,6 +40,18 @@ const myEmail = () => (state.user?.email || "").toLowerCase();
 const isOwner = () => !!state.user && myEmail() === OWNER_EMAIL.toLowerCase();
 const me = () => (state.user ? state.players.get(state.user.uid) : null);
 const myTeam = () => { const p = me(); return p && p.teamId ? state.teams.get(p.teamId) : null; };
+
+// ---------- Referidos ----------
+const refCodeOf = (uid) => String(uid || "").slice(0, 8);
+let pendingRef = new URLSearchParams(location.search).get("ref") || "";
+try { if (pendingRef) localStorage.setItem("wzref", pendingRef); else pendingRef = localStorage.getItem("wzref") || ""; } catch {}
+function referrerFor(uid) {
+  if (!pendingRef) return null;
+  return [...state.players.values()].find((p) => refCodeOf(p.id) === pendingRef && p.id !== uid) || null;
+}
+const siteUrl = () => location.origin + location.pathname;
+const flag = (cc) => (cc && /^[A-Z]{2}$/.test(cc) ? String.fromCodePoint(...[...cc].map((c) => 0x1f1e6 + c.charCodeAt(0) - 65)) : "");
+const countryName = (cc) => COUNTRIES.find((c) => c[0] === cc)?.[1] || "";
 
 // ---------- Nombres únicos ----------
 const cleanName = (s) => String(s || "").trim().replace(/\s+/g, " ");
@@ -92,15 +107,28 @@ onSnapshot(collection(db, "handles"), (s) => { state.handles = new Map(s.docs.ma
 getRedirectResult(auth).catch((e) => loginError(e));
 onSnapshot(collection(db, "suggestions"), (s) => { state.suggestions = s.docs.map((d) => ({ id: d.id, ...d.data() })); if (!document.activeElement?.closest?.("[data-form=suggest]")) renderSuggestions(); }, onErr("las sugerencias"));
 onSnapshot(doc(db, "settings", "announcement"), (d) => { state.announcement = d.exists() ? d.data() : null; renderAnnouncement(); }, () => {});
+onSnapshot(collection(db, "mvpvotes"), (s) => {
+  const m = new Map();
+  s.docs.forEach((d) => { const v = d.data(); if (!m.has(v.eventId)) m.set(v.eventId, new Map()); m.get(v.eventId).set(v.uid, v.votedFor); });
+  state.mvpvotes = m; metaCache = null; render();
+}, () => {});
+onSnapshot(doc(db, "settings", "season"), (d) => { state.season = d.exists() ? d.data() : null; metaCache = null; render(); renderSeasonForm(); }, () => {});
+onSnapshot(collection(db, "seasons"), (s) => { state.seasons = s.docs.map((d) => ({ id: d.id, ...d.data() })); renderRanking(); }, () => {});
 onSnapshot(collection(db, "results"), (s) => { state.results = new Map(s.docs.map((d) => [d.id, { id: d.id, ...d.data() }])); render(); renderResultsSelect(); }, onErr("los resultados"));
 
 onAuthStateChanged(auth, (u) => {
   state.user = u;
+  pingedAdmin = false;
+  unsubLobby?.(); unsubLobby = null; state.lobby = new Map();
   unsubAdminDoc?.(); unsubAdmins?.(); unsubAdminDoc = unsubAdmins = null;
   state.isAdmin = isOwner(); state.admins = [];
   if (u && !isOwner()) {
     unsubAdminDoc = onSnapshot(doc(db, "admins", myEmail()),
-      (d) => { state.isAdmin = d.exists(); render(); renderResultsSelect(); },
+      (d) => {
+        state.isAdmin = d.exists() && !!u.emailVerified;
+        if (state.isAdmin && !d.data().lastSeen && !pingedAdmin) { pingedAdmin = true; updateDoc(doc(db, "admins", myEmail()), { lastSeen: serverTimestamp() }).catch(() => { pingedAdmin = false; }); }
+        render(); renderResultsSelect();
+      },
       () => { state.isAdmin = false; render(); });
   }
   unsubReqs?.(); unsubReqs = null; state.joinreqs = [];
@@ -127,14 +155,45 @@ function applyTab() {
 window.addEventListener("hashchange", () => { applyTab(); window.scrollTo({ top: document.querySelector(".tabs").offsetTop, behavior: "smooth" }); });
 
 // ---------- Puntos e insignias ----------
-function statsFor(uid) {
+// Datos derivados de todas las partidas (se recalculan cuando cambia algo)
+function meta() {
+  if (metaCache) return metaCache;
+  const order = [...state.results.keys()]
+    .map((id) => ({ id, ms: tsMs(state.events.get(id)?.startsAt) }))
+    .filter((x) => state.events.get(x.id)?.status !== "cancelled")
+    .sort((a, b) => a.ms - b.ms);
+  const mvp = new Map(), firstAttend = new Map(), referred = new Map();
+  for (const { id, ms } of order) {
+    const votes = state.mvpvotes.get(id);
+    if (votes?.size) {
+      const count = new Map();
+      for (const to of votes.values()) count.set(to, (count.get(to) || 0) + 1);
+      const max = Math.max(...count.values());
+      mvp.set(id, { winners: new Set([...count].filter(([, c]) => c === max).map(([u]) => u)), votes: max, total: votes.size });
+    }
+    for (const [uid, e] of Object.entries(state.results.get(id).players || {})) if (e.attended && !firstAttend.has(uid)) firstAttend.set(uid, ms);
+  }
+  for (const p of state.players.values()) if (p.referredBy) {
+    if (!referred.has(p.referredBy)) referred.set(p.referredBy, []);
+    referred.get(p.referredBy).push(p.id);
+  }
+  return (metaCache = { order, mvp, firstAttend, referred });
+}
+function seasonStart() { return state.season?.startsAt ? tsMs(state.season.startsAt) : 0; }
+
+function statsFor(uid, since = 0) {
   const p = state.players.get(uid);
-  const s = { points: 0, games: 0, kills: 0, wins: 0, podiums: 0, bestKills: 0, history: [] };
+  const s = { points: 0, games: 0, kills: 0, wins: 0, podiums: 0, bestKills: 0, mvps: 0, streak: 0, bestStreak: 0, referrals: 0, recruits: 0, history: [] };
   if (!p) return s;
-  s.points += POINTS.register;
-  for (const r of state.results.values()) {
-    const e = r.players?.[uid]; if (!e) continue;
-    const ev = state.events.get(r.id);
+  const M = meta();
+  if (!since || tsMs(p.createdAt) >= since) s.points += POINTS.register;
+  let streak = 0;
+  for (const { id, ms } of M.order) {
+    const r = state.results.get(id), e = r.players?.[uid];
+    streak = e?.attended ? streak + 1 : 0;
+    s.bestStreak = Math.max(s.bestStreak, streak);
+    if (!e || ms < since) continue;
+    const ev = state.events.get(id);
     let pts = 0;
     if (e.attended) { pts += POINTS.attended; s.games++; }
     const kills = Number(e.kills) || 0;
@@ -142,11 +201,21 @@ function statsFor(uid) {
     pts += POINTS.place[e.place] || 0;
     pts += Number(e.bonus) || 0;
     if (e.captain && e.attended) pts += POINTS.captain;
+    const isMvp = !!M.mvp.get(id)?.winners.has(uid);
+    if (isMvp) { pts += POINTS.mvp; s.mvps++; }
+    if (e.attended && streak >= 3) pts += POINTS.streak;
     s.kills += kills; s.bestKills = Math.max(s.bestKills, kills);
     if (e.place === 1) s.wins++;
     if (e.place >= 1 && e.place <= 3) s.podiums++;
     s.points += pts;
-    s.history.push({ ms: tsMs(ev?.startsAt), title: ev?.title || "Partida", teamName: e.teamName, place: e.place, kills, attended: e.attended, pts });
+    s.history.push({ ms, title: ev?.title || "Partida", teamName: e.teamName, place: e.place, kills, attended: e.attended, pts, mvp: isMvp, captain: !!e.captain });
+  }
+  s.streak = streak;
+  const refs = M.referred.get(uid) || [];
+  s.referrals = refs.length;
+  for (const r of refs) {
+    const first = M.firstAttend.get(r);
+    if (first !== undefined) { s.recruits++; if (first >= since) s.points += POINTS.referral; }
   }
   s.history.sort((a, b) => b.ms - a.ms);
   return s;
@@ -160,6 +229,9 @@ function badgesFor(uid, s) {
   if (s.bestKills >= 10) b.push(["💀", "Letal", "10+ kills en una partida"]);
   if (s.podiums >= 1) b.push(["🥉", "Podio", "Top 3 en una partida"]);
   if (s.wins >= 1) b.push(["🏆", "Campeón", "Ganó una partida"]);
+  if (s.mvps >= 1) b.push(["🌟", "MVP", "Elegido MVP por sus compañeros"]);
+  if (s.streak >= 3) b.push(["⚡", "En racha", `${s.streak} partidas seguidas`]);
+  if (s.recruits >= 1) b.push(["🤝", "Reclutador", `Trajo ${s.recruits} jugador${s.recruits === 1 ? "" : "es"} que ya jugaron`]);
   return b;
 }
 const placeLabel = (n) => (n ? `${n}º` : "—");
@@ -180,7 +252,7 @@ function syncLobbySub() {
   if (allowed && !unsubLobby) {
     unsubLobby = onSnapshot(collection(db, "lobby"),
       (s) => { state.lobby = new Map(s.docs.map((d) => [d.id, d.data()])); renderNext(); renderCalendar(); },
-      () => { unsubLobby = null; state.lobby = new Map(); });
+      () => { state.lobby = new Map(); }); // no se reintenta hasta que cambie la sesión
   } else if (!allowed && unsubLobby) { unsubLobby(); unsubLobby = null; state.lobby = new Map(); }
 }
 
@@ -197,6 +269,7 @@ function cleanStaleReqs() {
 }
 
 function render() {
+  metaCache = null;
   syncLobbySub();
   cleanStaleReqs();
   backfillHandles();
@@ -226,9 +299,14 @@ function eventExtras(e, { showNames = true } = {}) {
   const parts = [];
   if (e.id && e.ms > Date.now() - 3 * 3600e3) {
     const r = state.rsvps.get(e.id) || new Map();
-    const going = [...r].filter(([, g]) => g).map(([u]) => u);
+    const going = [...r].filter(([u, g]) => g && state.players.has(u)).map(([u]) => u);
     const names = going.map((u) => state.players.get(u)?.gamertag).filter(Boolean);
     parts.push(`<p class="rsvp-count">✅ <b>${going.length}</b> confirmado${going.length === 1 ? "" : "s"}${showNames && names.length ? `: <span class="muted">${names.map(esc).join(", ")}</span>` : ""}</p>`);
+    if (e.minPlayers > 0) {
+      const pct = Math.min(100, Math.round((going.length / e.minPlayers) * 100));
+      parts.push(`<div class="progress" title="Mínimo para iniciar la privada"><span style="width:${pct}%"></span></div>
+        <p class="small muted">${going.length >= e.minPlayers ? "✅ ¡Hay jugadores suficientes para arrancar!" : `Faltan <b>${e.minPlayers - going.length}</b> para el mínimo de ${e.minPlayers} de la privada`}</p>`);
+    }
     const p = me();
     if (p) {
       const mine = r.get(p.id);
@@ -245,6 +323,14 @@ function eventExtras(e, { showNames = true } = {}) {
   parts.push(`<a class="btn sm wa" href="${shareLink(e)}" target="_blank" rel="noopener">Compartir por WhatsApp</a>`);
   return parts.join("");
 }
+function formatLine(e) {
+  const bits = [e.mode, e.minPlayers ? `mín. ${e.minPlayers} jugadores` : ""].filter(Boolean);
+  return bits.length ? `<p class="small fmt">🎮 ${bits.map(esc).join(" · ")}</p>` : "";
+}
+function squadNo(tid) {
+  const list = [...state.teams.values()].sort((a, b) => tsMs(a.createdAt) - tsMs(b.createdAt));
+  return list.findIndex((t) => t.id === tid) + 1;
+}
 function renderNext() {
   const e = nextEvent();
   if (!e) { $("next").innerHTML = state.loaded.events ? `<p class="muted">No hay partidas programadas.</p>` : ""; return; }
@@ -253,7 +339,9 @@ function renderNext() {
     <p class="next-title">${esc(e.title)}</p>
     <p class="when">${esc(whenLine(e.ms))}</p>
     <p class="count">${esc(countdown(e.ms))}</p>
+    ${formatLine(e)}
     ${e.notes ? `<p class="notes">${esc(e.notes)}</p>` : ""}
+    ${myTeam() ? `<p class="my-squad">Tu escuadra en la privada: <b>#${squadNo(myTeam().id)}</b> · ${esc(myTeam().name)}${e.id && myTeam().captainUid === state.user?.uid ? ` <button class="btn sm" data-act="proof-pick" data-event="${e.id}" data-team="${myTeam().id}">📷 Subir marcador</button>` : ""}</p>` : ""}
     <div class="next-extras">${eventExtras(e)}</div>
     ${state.isAdmin ? `<div class="team-actions">${e.id
       ? `<button class="btn sm" data-act="ev-edit" data-id="${e.id}">Editar</button><button class="btn sm danger" data-act="ev-cancel-event" data-id="${e.id}">Cancelar partida</button>`
@@ -273,8 +361,9 @@ function nameBtn(uid, text) {
 }
 function playerLine(p, extra = "") {
   if (!p) return `<div class="who"><b>(jugador eliminado)</b></div>`;
-  const bits = [p.platform, p.activisionId, p.mic ? "🎙️" : "sin micro"].filter(Boolean).map(esc).join(" · ");
-  return `<div class="who"><b>${nameBtn(p.id, p.gamertag)}${extra}</b><small>${bits}</small></div>`;
+  const bits = [p.platform, p.role, p.activisionId, p.mic ? "🎙️" : "sin micro"].filter(Boolean).map(esc).join(" · ");
+  const f = flag(p.country);
+  return `<div class="who"><b>${f ? `<span class="flag" title="${esc(countryName(p.country))}">${f}</span> ` : ""}${nameBtn(p.id, p.gamertag)}${extra}</b><small>${bits}</small></div>`;
 }
 
 function renderMe() {
@@ -286,12 +375,23 @@ function renderMe() {
         <div class="row" style="margin-top:8px"><button class="btn sm" data-act="copy-link">Copiar link</button></div></div>` : ""}
       <p class="muted">Inicia sesión con tu cuenta de Google para registrarte, sumar puntos y unirte a un equipo.</p>
       <button class="btn primary" data-act="login">Entrar con Google</button>
+      <details class="help" id="email-login"><summary class="muted small">¿No tienes Google o no te funciona? Entra con correo y contraseña</summary>
+        <form data-form="email-login" class="grid-form" style="margin-top:8px">
+          <label>Correo<input type="email" name="email" required autocomplete="email"></label>
+          <label>Contraseña (mín. 6)<input type="password" name="password" required minlength="6" autocomplete="current-password"></label>
+        </form>
+        <div class="row">
+          <button class="btn primary sm" data-act="email-signin">Entrar</button>
+          <button class="btn sm" data-act="email-signup">Crear cuenta</button>
+          <button class="btn sm" data-act="email-reset">Olvidé mi contraseña</button>
+        </div>
+      </details>
       <details class="help"><summary class="muted small">¿Problemas para entrar?</summary>
         <ul class="small muted">
           <li>Abre el link en <b>Chrome o Safari</b>, no dentro de Instagram/Facebook.</li>
           <li>Si no pasa nada al tocar el botón, permite las ventanas emergentes para este sitio.</li>
           <li>En iPhone: Ajustes → Safari → desactiva <i>Bloquear ventanas emergentes</i> mientras entras.</li>
-          <li>Necesitas una cuenta de Google (Gmail). Si no tienes, créala gratis en accounts.google.com.</li>
+          <li>Si Google no te deja, usa <b>correo y contraseña</b> (arriba).</li>
         </ul>
         <button class="btn sm" data-act="copy-link">Copiar link de la página</button>
       </details>`;
@@ -299,11 +399,17 @@ function renderMe() {
   }
   if (!state.loaded.players) { el.innerHTML = `<p class="muted">Cargando…</p>`; return; }
   const role = isOwner() ? "dueño" : state.isAdmin ? "admin" : "";
+  const unverified = !state.user.emailVerified && state.user.providerData?.some((x) => x.providerId === "password");
   const head = `<div class="row" style="justify-content:space-between">
       <span class="muted small">${esc(state.user.email)}${role ? ` · <b class="accent">${role}</b>` : ""}</span>
-      <button class="btn sm" data-act="logout">Salir</button></div>`;
+      <button class="btn sm" data-act="logout">Salir</button></div>
+      ${unverified ? `<p class="small alert" style="margin-top:8px">Revisa tu correo y toca el enlace de verificación. <button class="linkish small" data-act="email-verify">Reenviar</button> · <button class="linkish small" data-act="email-refresh">Ya verifiqué</button></p>` : ""}`;
   const p = me();
-  if (!p) { el.innerHTML = head + `<h2 style="margin-top:12px">Crea tu perfil de jugador</h2><p class="muted small">+${POINTS.register} puntos por registrarte.</p>${profileForm({})}`; return; }
+  if (!p) {
+    const ref = referrerFor(state.user.uid);
+    el.innerHTML = head + `<h2 style="margin-top:12px">Crea tu perfil de jugador</h2><p class="muted small">+${POINTS.register} puntos por registrarte.${ref ? ` Te invitó <b>${esc(ref.gamertag)}</b> 🤝` : ""}</p>${profileForm({})}`;
+    return;
+  }
 
   const s = statsFor(p.id);
   const t = myTeam();
@@ -330,11 +436,17 @@ function renderMe() {
   const badges = badgesFor(p.id, s).map(([i, n, d]) => `<span class="badge" title="${esc(d)}">${i} ${esc(n)}</span>`).join("");
   el.innerHTML = head + `
     <div class="me-top">
-      <h2>${esc(p.gamertag)}</h2>
+      <h2>${flag(p.country) ? `<span class="flag">${flag(p.country)}</span> ` : ""}${esc(p.gamertag)}</h2>
       <div class="me-pts"><b>${s.points}</b><span>puntos</span></div>
     </div>
     <div class="badges">${badges}</div>
     ${teamBlock}
+    <details class="refer" style="margin-top:12px"><summary><b>🤝 Invita amigos y gana puntos</b> <span class="muted small">(${s.referrals} invitado${s.referrals === 1 ? "" : "s"}, ${s.recruits} ya jugaron)</span></summary>
+      <p class="small muted">Ganas <b>+${POINTS.referral}</b> por cada amigo que se registre con tu link y juegue su primera partida.</p>
+      <div class="row"><input readonly value="${esc(siteUrl())}?ref=${refCodeOf(p.id)}" style="flex:1;min-width:200px" aria-label="Tu link de invitación">
+        <button class="btn sm" data-act="copy-ref">Copiar</button>
+        <a class="btn sm wa" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(`🎮 Únete a las privadas de Warzone de ${SITE.title}. Regístrate con mi link: ${siteUrl()}?ref=${refCodeOf(p.id)}`)}">WhatsApp</a></div>
+    </details>
     <details style="margin-top:12px"><summary class="muted">Editar mi perfil</summary>${profileForm(p)}
       ${!p.teamId ? `<button class="btn sm danger" data-act="delete-me">Borrar mi registro</button>` : ""}
     </details>`;
@@ -360,6 +472,8 @@ function profileForm(p) {
       <label>Gamertag (cómo te llamamos)<input name="gamertag" required minlength="2" maxlength="24" value="${esc(p.gamertag)}"></label>
       <label>Activision ID<input name="activisionId" maxlength="40" placeholder="Nombre#1234567" value="${esc(p.activisionId)}"></label>
       <label>Plataforma<select name="platform">${PLATFORMS.map((x) => `<option ${p.platform === x ? "selected" : ""}>${x}</option>`).join("")}</select></label>
+      <label>País (opcional)<select name="country"><option value="">—</option>${COUNTRIES.map(([c, n]) => `<option value="${c}" ${p.country === c ? "selected" : ""}>${flag(c)} ${esc(n)}</option>`).join("")}</select></label>
+      <label>Rol preferido (opcional)<select name="role"><option value="">—</option>${ROLES.map((x) => `<option ${p.role === x ? "selected" : ""}>${esc(x)}</option>`).join("")}</select></label>
     </div>
     <label>Link de tu tracker (opcional)<input name="trackerUrl" type="url" maxlength="200" placeholder="https://cod.tracker.gg/…" value="${esc(p.trackerUrl)}"></label>
     <p class="muted small" style="margin:4px 0 10px">Para que se vean tus stats, pon tu cuenta de Activision en <b>Público</b>.</p>
@@ -375,12 +489,16 @@ function renderPointsHelp() {
     [`+${POINTS.captain}`, "Ser capitán en una partida"],
     [`+${POINTS.attended}`, "Asistir a una partida"],
     [`+${POINTS.perKill}`, "Por cada kill"],
-    [`+${pl[1]} / ${pl[2]} / ${pl[3]}`, "Equipo en 1º / 2º / 3º"]
+    [`+${pl[1]} / ${pl[2]} / ${pl[3]}`, "Equipo en 1º / 2º / 3º"],
+    [`+${POINTS.mvp}`, "Ser elegido MVP de la partida"],
+    [`+${POINTS.streak}`, "Por partida en racha (3+ seguidas)"],
+    [`+${POINTS.referral}`, "Por cada amigo invitado que juegue"]
   ].map(([p, t]) => `<li><b>${p}</b><span>${t}</span></li>`).join("");
 }
 
-function rankedPlayers() {
-  return [...state.players.values()].map((p) => ({ p, s: statsFor(p.id) }))
+function rankSince() { return state.rankMode === "season" && state.season?.startsAt ? seasonStart() : 0; }
+function rankedPlayers(since = rankSince(), country = "") {
+  return [...state.players.values()].filter((p) => !country || p.country === country).map((p) => ({ p, s: statsFor(p.id, since) }))
     .sort((a, b) => b.s.points - a.s.points || b.s.kills - a.s.kills || a.p.gamertag.localeCompare(b.p.gamertag));
 }
 function renderMiniRank() {
@@ -390,11 +508,23 @@ function renderMiniRank() {
     : `<li class="muted">Aún no hay jugadores.</li>`;
 }
 function renderRanking() {
-  const rows = rankedPlayers();
-  $("rank").innerHTML = `<thead><tr><th>#</th><th>Jugador</th><th>Pts</th><th>Partidas</th><th>Kills</th><th>🏆</th></tr></thead><tbody>` +
+  const hasSeason = !!state.season?.startsAt;
+  const mode = hasSeason ? state.rankMode : "all";
+  const used = [...new Set([...state.players.values()].map((p) => p.country).filter(Boolean))].sort();
+  $("rank-controls").innerHTML = `
+    ${hasSeason ? `<div class="seg">
+      <button class="btn sm ${mode === "season" ? "primary" : ""}" data-act="rank-mode" data-id="season">${esc(state.season.name || "Temporada")}</button>
+      <button class="btn sm ${mode === "all" ? "primary" : ""}" data-act="rank-mode" data-id="all">Histórico</button></div>` : ""}
+    ${used.length ? `<select id="rank-country" style="width:auto"><option value="">🌎 Todos los países</option>${used.map((c) => `<option value="${c}" ${state.rankCountry === c ? "selected" : ""}>${flag(c)} ${esc(countryName(c))}</option>`).join("")}</select>` : ""}`;
+  const rows = rankedPlayers(rankSince(), state.rankCountry);
+  $("rank").innerHTML = `<thead><tr><th>#</th><th>Jugador</th><th>Pts</th><th>Partidas</th><th>Kills</th><th>🏆</th><th>🌟</th></tr></thead><tbody>` +
     (rows.length ? rows.map(({ p, s }, i) => `<tr class="${p.id === state.user?.uid ? "mine" : ""}">
-      <td>${i + 1}</td><td>${nameBtn(p.id, p.gamertag)}</td><td><b>${s.points}</b></td><td>${s.games}</td><td>${s.kills}</td><td>${s.wins}</td></tr>`).join("")
-      : `<tr><td colspan="6" class="muted">Aún no hay jugadores.</td></tr>`) + `</tbody>`;
+      <td>${i + 1}</td><td>${flag(p.country)} ${nameBtn(p.id, p.gamertag)}</td><td><b>${s.points}</b></td><td>${s.games}</td><td>${s.kills}</td><td>${s.wins}</td><td>${s.mvps}</td></tr>`).join("")
+      : `<tr><td colspan="7" class="muted">Aún no hay jugadores.</td></tr>`) + `</tbody>`;
+  const hof = [...state.seasons].sort((a, b) => tsMs(b.endsAt) - tsMs(a.endsAt));
+  $("hall").innerHTML = hof.length ? hof.map((x) => `<div class="hof"><h3>${esc(x.name)}</h3><p class="small muted">${esc(fmt(tsMs(x.startsAt), ADMIN_TZ.id))} → ${esc(fmt(tsMs(x.endsAt), ADMIN_TZ.id))}</p>
+      <ol>${(x.top || []).map((t, i) => `<li>${["🥇", "🥈", "🥉"][i] || ""} <b>${esc(t.gamertag)}</b> <span class="muted">${t.points} pts</span></li>`).join("")}</ol></div>`).join("")
+    : `<p class="muted small">Cuando un admin cierre una temporada, sus campeones quedan aquí.</p>`;
 }
 
 function renderTeams() {
@@ -441,7 +571,7 @@ function renderTeams() {
       if (inv.length) pending += `<p class="small muted pending">📨 Invitados: ${inv.map((r) => `${esc(state.players.get(r.uid)?.gamertag)} <button class="linkish small" data-act="req-delete" data-id="${r.id}">(cancelar)</button>`).join(", ")}</p>`;
     }
     return `<article class="team ${isMember ? "mine" : ""}">
-      <div class="team-top"><h3>${esc(t.name)}</h3><span class="tag ${full ? "full" : ""}">${full ? "Completo" : `${members.length}/${TEAM_SIZE}`}</span></div>
+      <div class="team-top"><h3><span class="squad" title="Número de escuadra para elegir en la privada">#${squadNo(t.id)}</span> ${esc(t.name)}</h3><span class="tag ${full ? "full" : ""}">${full ? "Completo" : `${members.length}/${TEAM_SIZE}`}</span></div>
       <ul class="slots">${slots.join("")}</ul>
       ${actions ? `<div class="team-actions">${actions}</div>` : ""}
       ${pending}
@@ -497,10 +627,13 @@ function renderCalendar() {
       <p class="ev-when">${esc(whenLine(e.ms))}</p>
       <h3>${cancelled ? `<span class="tag danger-tag">Cancelada</span> ` : ""}${esc(e.title)}</h3>
       ${cancelled && e.cancelReason ? `<p class="small">Motivo: ${esc(e.cancelReason)}</p>` : ""}
+      ${formatLine(e)}
       ${e.notes ? `<p class="muted small">${esc(e.notes)}</p>` : ""}
       ${e.ms > now ? `<p class="count small">${esc(countdown(e.ms))}</p>` : ""}
       ${e.ms > now - 3 * 3600e3 && !cancelled ? eventExtras(e) : ""}
       ${podium}
+      ${r ? mvpBlock(e, r) : ""}
+      ${r ? proofBlock(e, r) : ""}
       ${adminBtns(e)}
     </article>`;
   };
@@ -508,23 +641,126 @@ function renderCalendar() {
   $("past").innerHTML = past.length ? past.map(card).join("") : `<div class="empty-note">Todavía no se ha jugado ninguna.</div>`;
 }
 
+function mvpBlock(e, r) {
+  const M = meta().mvp.get(e.id);
+  const attended = Object.entries(r.players || {}).filter(([, v]) => v.attended).map(([u]) => u);
+  if (!attended.length) return "";
+  let html = "";
+  if (M) html += `<p class="small mvp">🌟 MVP: ${[...M.winners].map((u) => nameBtn(u, state.players.get(u)?.gamertag || "—")).join(", ")} <span class="muted">(${M.votes} de ${M.total} votos)</span></p>`;
+  const p = me();
+  const open = Date.now() < e.ms + MVP_DAYS * 864e5;
+  const voted = p && state.mvpvotes.get(e.id)?.has(p.id);
+  if (p && open && r.players?.[p.id]?.attended && !voted) {
+    const opts = attended.filter((u) => u !== p.id && state.players.has(u));
+    if (opts.length) html += `<form class="row mvp-form" data-form="mvp" data-event="${e.id}">
+      <select name="to" required style="flex:1;min-width:150px"><option value="">Vota al MVP…</option>${opts.map((u) => `<option value="${u}">${esc(state.players.get(u).gamertag)}</option>`).join("")}</select>
+      <button class="btn sm primary">Votar</button></form>`;
+  } else if (voted) html += `<p class="small muted">Ya votaste el MVP de esta partida.</p>`;
+  else if (open && attended.length) html += `<p class="small muted">Los que jugaron votan al MVP (hasta ${MVP_DAYS} días después).</p>`;
+  return html;
+}
+function proofBlock(e, r) {
+  const p = me();
+  const mine = p && r.players?.[p.id];
+  const canUpload = mine?.captain && mine.teamId;
+  return `<div class="row" style="margin-top:6px">
+    <button class="btn sm" data-act="proof-view" data-id="${e.id}">📷 Ver marcadores</button>
+    ${canUpload ? `<button class="btn sm" data-act="proof-pick" data-event="${e.id}" data-team="${mine.teamId}">Subir marcador de mi equipo</button>` : ""}
+  </div>`;
+}
+
+// ---------- Fotos del marcador ----------
+async function compressImage(file) {
+  const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = URL.createObjectURL(file); });
+  let w = img.naturalWidth, h = img.naturalHeight, max = 1400;
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const k = Math.min(1, max / Math.max(w, h));
+    const c = document.createElement("canvas"); c.width = Math.round(w * k); c.height = Math.round(h * k);
+    c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+    for (const q of [0.8, 0.65, 0.5]) { const url = c.toDataURL("image/jpeg", q); if (url.length < 900000) return url; }
+    max = Math.round(max * 0.75);
+  }
+  throw new Error("La imagen es demasiado grande");
+}
+function pickProof(eventId, teamId) {
+  const input = document.createElement("input");
+  input.type = "file"; input.accept = "image/*";
+  input.onchange = async () => {
+    const file = input.files?.[0]; if (!file) return;
+    toast("Subiendo foto…");
+    try {
+      const image = await compressImage(file);
+      await run(() => setDoc(doc(db, "proofs", `${eventId}_${teamId}`), { eventId, teamId, image, by: state.user.uid, at: serverTimestamp() }), "📷 Marcador subido");
+    } catch (err) { toast(err.message || "No se pudo procesar la imagen", true); }
+  };
+  input.click();
+}
+async function viewProofs(eventId) {
+  const e = state.events.get(eventId), r = state.results.get(eventId);
+  $("profile").innerHTML = `<div class="row" style="justify-content:space-between"><h2>📷 Marcadores</h2><button class="btn sm" data-act="close-profile">✕</button></div><p class="muted">Cargando…</p>`;
+  $("profile").showModal();
+  try {
+    const snap = await getDocs(query(collection(db, "proofs"), where("eventId", "==", eventId)));
+    const items = snap.docs.map((d) => d.data()).filter((x) => String(x.image || "").startsWith("data:image/"));
+    $("profile").innerHTML = `<div class="row" style="justify-content:space-between"><div><p class="kicker">${esc(e?.title || "Partida")}</p><h2>📷 Marcadores</h2></div><button class="btn sm" data-act="close-profile">✕</button></div>
+      ${items.length ? items.map((x) => `<figure class="proof"><img src="${esc(x.image)}" alt="Marcador"><figcaption>${esc(r?.teams?.[x.teamId]?.name || state.teams.get(x.teamId)?.name || "Equipo")}${state.isAdmin ? ` <button class="linkish small" data-act="proof-del" data-id="${esc(eventId + "_" + x.teamId)}">(borrar)</button>` : ""}</figcaption></figure>`).join("")
+        : `<p class="muted">Todavía nadie subió el marcador de esta partida.</p>`}`;
+  } catch (err) { $("profile").innerHTML += `<p class="alert">No se pudieron cargar: ${esc(err.message)}</p>`; }
+}
+function deleteProof(id) {
+  if (!confirm("¿Borrar esta foto?")) return;
+  return run(() => deleteDoc(doc(db, "proofs", id)), "Foto borrada").then(() => $("profile").close());
+}
+
+// ---------- MVP ----------
+function voteMvp(form) {
+  const eventId = form.dataset.event, to = new FormData(form).get("to");
+  if (!to) return toast("Elige a quién votas", true);
+  const uid = state.user.uid;
+  return run(() => setDoc(doc(db, "mvpvotes", `${eventId}_${uid}`), { eventId, uid, votedFor: to, at: serverTimestamp() }), "🌟 Voto registrado");
+}
+
+// ---------- Temporadas ----------
+function renderSeasonForm() {
+  const f = $("season-form"); if (!f || document.activeElement?.form === f) return;
+  f.elements.name.value = state.season?.name || "";
+  f.elements.start.value = state.season?.startsAt ? msToAdminInput(tsMs(state.season.startsAt)) : "";
+  $("season-info").textContent = state.season?.startsAt ? `Temporada actual: ${state.season.name} (desde ${fmt(tsMs(state.season.startsAt), ADMIN_TZ.id)})` : "No hay temporada activa: el ranking muestra el histórico.";
+}
+function saveSeason(form) {
+  const f = new FormData(form);
+  const name = String(f.get("name") || "").trim().slice(0, 40), start = String(f.get("start") || "");
+  if (!name || !start) return toast("Pon nombre y fecha de inicio", true);
+  return run(() => setDoc(doc(db, "settings", "season"), { name, startsAt: Timestamp.fromMillis(adminInputToMs(start)) }), "Temporada guardada");
+}
+async function closeSeason() {
+  if (!state.season?.startsAt) return toast("No hay temporada activa", true);
+  const top = rankedPlayers(seasonStart()).slice(0, 3).map(({ p, s }) => ({ uid: p.id, gamertag: p.gamertag, points: s.points }));
+  const next = prompt(`Cerrar "${state.season.name}" y guardar en el salón de la fama:\n${top.map((t, i) => `${i + 1}. ${t.gamertag} (${t.points} pts)`).join("\n") || "(sin jugadores)"}\n\nNombre de la nueva temporada:`, "Temporada " + (state.seasons.length + 2));
+  if (next === null) return;
+  const b = writeBatch(db);
+  b.set(doc(collection(db, "seasons")), { name: state.season.name, startsAt: state.season.startsAt, endsAt: Timestamp.now(), top });
+  b.set(doc(db, "settings", "season"), { name: next.trim().slice(0, 40) || "Nueva temporada", startsAt: Timestamp.now() });
+  return run(() => b.commit(), "Temporada cerrada. ¡Felicitaciones a los campeones!");
+}
+
 function openProfile(uid) {
   const p = state.players.get(uid); if (!p) return;
   const s = statsFor(uid);
   const t = p.teamId && state.teams.get(p.teamId);
-  const rank = rankedPlayers().findIndex((x) => x.p.id === uid) + 1;
+  const rank = rankedPlayers(0).findIndex((x) => x.p.id === uid) + 1;
   const badges = badgesFor(uid, s).map(([i, n, d]) => `<span class="badge" title="${esc(d)}">${i} ${esc(n)}</span>`).join("");
   const hist = s.history.length
     ? `<div class="table-wrap"><table class="rank"><thead><tr><th>Partida</th><th>Equipo</th><th>Pos.</th><th>Kills</th><th>Pts</th></tr></thead><tbody>${
-        s.history.map((h) => `<tr><td>${esc(h.title)}<br><small class="muted">${h.ms ? esc(fmt(h.ms, ADMIN_TZ.id)) : ""}</small></td><td>${esc(h.teamName || "—")}</td><td>${placeLabel(h.place)}</td><td>${h.kills}</td><td>${h.pts}</td></tr>`).join("")
+        s.history.map((h) => `<tr><td>${esc(h.title)}${h.mvp ? " 🌟" : ""}<br><small class="muted">${h.ms ? esc(fmt(h.ms, ADMIN_TZ.id)) : ""}</small></td><td>${esc(h.teamName || "—")}${h.captain ? " ★" : ""}</td><td>${placeLabel(h.place)}</td><td>${h.kills}</td><td>${h.pts}</td></tr>`).join("")
       }</tbody></table></div>`
     : `<p class="muted">Aún sin partidas registradas.</p>`;
   $("profile").innerHTML = `
     <div class="row" style="justify-content:space-between;align-items:flex-start">
-      <div><p class="kicker">Perfil de jugador</p><h2>${esc(p.gamertag)}</h2></div>
+      <div><p class="kicker">Perfil de jugador</p><h2>${flag(p.country)} ${esc(p.gamertag)}</h2></div>
       <button class="btn sm" data-act="close-profile" aria-label="Cerrar">✕</button>
     </div>
-    <p class="muted small">${[p.platform, p.activisionId, p.mic ? "🎙️ micro" : "sin micro"].filter(Boolean).map(esc).join(" · ")}</p>
+    <p class="muted small">${[countryName(p.country), p.platform, p.role, p.activisionId, p.mic ? "🎙️ micro" : "sin micro"].filter(Boolean).map(esc).join(" · ")}</p>
     ${p.trackerUrl ? `<p><a class="btn sm" href="${esc(p.trackerUrl)}" target="_blank" rel="noopener">📊 Ver stats en su tracker</a></p>` : ""}
     <p>${t ? `Equipo: <b>${esc(t.name)}</b>${t.captainUid === uid ? " (capitán)" : ""}` : `<span class="muted">En el pool</span>`}</p>
     <div class="stats">
@@ -533,6 +769,9 @@ function openProfile(uid) {
       <div class="stat"><b>${s.games}</b><span>partidas</span></div>
       <div class="stat"><b>${s.kills}</b><span>kills</span></div>
       <div class="stat"><b>${s.wins}</b><span>victorias</span></div>
+      <div class="stat"><b>${s.mvps}</b><span>MVP</span></div>
+      <div class="stat"><b>${s.bestStreak}</b><span>mejor racha</span></div>
+      <div class="stat"><b>${s.recruits}</b><span>reclutados</span></div>
     </div>
     <div class="badges" style="margin:14px 0">${badges}</div>
     <h3 style="margin:8px 0">Historial</h3>
@@ -561,7 +800,8 @@ function renderAdmins() {
   $("admins-panel").hidden = !isOwner();
   if (!isOwner()) return;
   $("admins").innerHTML = state.admins.length
-    ? state.admins.map((a) => `<li><span>${esc(a.email)}</span><button class="btn sm danger" data-act="admin-remove" data-email="${esc(a.email)}">Quitar</button></li>`).join("")
+    ? state.admins.map((a) => `<li><span>${esc(a.email)}<br><small class="${a.lastSeen ? "ok" : "muted"}">${a.lastSeen ? `✅ Ya entró como admin (${esc(fmt(tsMs(a.lastSeen), ADMIN_TZ.id))})` : "⏳ Aún no ha entrado con este correo"}</small></span>
+        <span class="btns"><a class="btn sm wa" target="_blank" rel="noopener" href="${adminInviteLink(a.email)}">Invitar</a><button class="btn sm danger" data-act="admin-remove" data-email="${esc(a.email)}">Quitar</button></span></li>`).join("")
     : `<li class="muted">Todavía no hay otros admins.</li>`;
 }
 
@@ -594,7 +834,8 @@ function renderResultsForm(eventId) {
       return `<fieldset class="res-team" data-team="${t.id}" data-name="${esc(tr.name || t.name)}">
         <div class="row" style="justify-content:space-between">
           <h3>${esc(t.name)}</h3>
-          <label class="inline">Posición <input type="number" name="place" min="1" max="150" value="${tr.place || ""}" style="width:80px"></label>
+          <span class="row" style="gap:6px"><label class="inline">Posición <input type="number" name="place" min="1" max="150" value="${tr.place || ""}" style="width:80px"></label>
+          <button type="button" class="btn sm" data-act="proof-pick" data-event="${eventId}" data-team="${t.id}" title="Subir foto del marcador">📷</button></span>
         </div>
         ${(t.members || []).map((uid) => {
           const pr = r.players?.[uid] || {};
@@ -645,20 +886,59 @@ async function login() {
     } else loginError(e);
   }
 }
+function emailCreds() {
+  const f = document.querySelector("[data-form=email-login]"); if (!f) return null;
+  const email = f.elements.email.value.trim(), password = f.elements.password.value;
+  if (!email || !password) { toast("Escribe tu correo y contraseña", true); return null; }
+  return { email, password };
+}
+const EMAIL_ERRORS = {
+  "auth/invalid-credential": "Correo o contraseña incorrectos.",
+  "auth/wrong-password": "Contraseña incorrecta.",
+  "auth/user-not-found": "No hay cuenta con ese correo. Toca \"Crear cuenta\".",
+  "auth/email-already-in-use": "Ese correo ya tiene cuenta. Toca \"Entrar\" o \"Olvidé mi contraseña\".",
+  "auth/weak-password": "La contraseña debe tener al menos 6 caracteres.",
+  "auth/invalid-email": "El correo no es válido.",
+  "auth/operation-not-allowed": "El organizador todavía no activó el acceso con correo. Avísale.",
+  "auth/too-many-requests": "Demasiados intentos. Espera unos minutos."
+};
+const emailErr = (e) => toast(EMAIL_ERRORS[e.code] || `No se pudo (${e.code || e.message})`, true);
+async function emailSignIn() { const c = emailCreds(); if (!c) return; try { await signInWithEmailAndPassword(auth, c.email, c.password); } catch (e) { emailErr(e); } }
+async function emailSignUp() {
+  const c = emailCreds(); if (!c) return;
+  try {
+    const cred = await createUserWithEmailAndPassword(auth, c.email, c.password);
+    await sendEmailVerification(cred.user).catch(() => {});
+    toast("Cuenta creada. Te enviamos un correo de verificación.");
+  } catch (e) { emailErr(e); }
+}
+async function emailReset() {
+  const f = document.querySelector("[data-form=email-login]"); const email = f?.elements.email.value.trim();
+  if (!email) return toast("Escribe tu correo arriba", true);
+  try { await sendPasswordResetEmail(auth, email); toast("Te enviamos un correo para cambiar la contraseña."); } catch (e) { emailErr(e); }
+}
+async function resendVerify() { try { await sendEmailVerification(auth.currentUser); toast("Correo de verificación enviado."); } catch (e) { emailErr(e); } }
+async function copyRef() {
+  const url = `${siteUrl()}?ref=${refCodeOf(state.user.uid)}`;
+  try { await navigator.clipboard.writeText(url); toast("Link copiado"); } catch { prompt("Copia tu link:", url); }
+}
+
 async function copyLink() {
   const url = location.origin + location.pathname;
   try { await navigator.clipboard.writeText(url); toast("Link copiado. Pégalo en Chrome o Safari."); }
   catch { prompt("Copia este link y ábrelo en Chrome o Safari:", url); }
 }
 
-function saveProfile(form) {
+async function saveProfile(form) {
   const f = new FormData(form);
   const data = {
     gamertag: String(f.get("gamertag") || "").trim().slice(0, 24),
     activisionId: String(f.get("activisionId") || "").trim().slice(0, 40),
     platform: String(f.get("platform")),
     mic: f.get("mic") === "on",
-    trackerUrl: String(f.get("trackerUrl") || "").trim().slice(0, 200)
+    trackerUrl: String(f.get("trackerUrl") || "").trim().slice(0, 200),
+    country: COUNTRIES.some((c) => c[0] === f.get("country")) ? String(f.get("country")) : "",
+    role: ROLES.includes(f.get("role")) ? String(f.get("role")) : ""
   };
   if (data.trackerUrl && !/^https:\/\//.test(data.trackerUrl)) return toast("El link del tracker debe empezar con https://", true);
   data.gamertag = cleanName(data.gamertag); data.activisionId = cleanName(data.activisionId);
@@ -683,8 +963,11 @@ function saveProfile(form) {
     b.update(playerRef(uid), { ...data, updatedAt: serverTimestamp() });
     return run(() => b.commit(), "Perfil actualizado");
   }
-  b.set(playerRef(uid), { ...data, teamId: null, createdAt: serverTimestamp() });
-  return run(() => b.commit(), `¡Registrado! +${POINTS.register} puntos`);
+  const ref = referrerFor(uid);
+  b.set(playerRef(uid), { ...data, teamId: null, createdAt: serverTimestamp(), ...(ref ? { referredBy: ref.id } : {}) });
+  const ok = await run(() => b.commit(), `¡Registrado! +${POINTS.register} puntos`);
+  if (ok) { try { localStorage.removeItem("wzref"); } catch {} pendingRef = ""; }
+  return ok;
 }
 
 function createTeam(form) {
@@ -743,7 +1026,8 @@ function ownHandles(uid) { return [...state.handles].filter(([, u]) => u === uid
 let backfilling = false;
 function backfillHandles() {
   const p = me(); if (!p || backfilling || !state.handlesLoaded) return;
-  const want = [gKey(p.gamertag), p.activisionId ? aKey(p.activisionId) : null].filter((k) => k && !state.handles.has(k));
+  const raw = (pfx, v) => pfx + String(v).toLowerCase();
+  const want = [raw("g_", p.gamertag), p.activisionId ? raw("a_", p.activisionId) : null].filter((k) => k && !k.includes("/") && !state.handles.has(k));
   if (!want.length) return;
   backfilling = true;
   const b = writeBatch(db);
@@ -771,7 +1055,8 @@ async function saveEvent(form) {
   const f = new FormData(form);
   const id = f.get("id"), title = String(f.get("title") || "").trim().slice(0, 60), when = String(f.get("when") || "");
   if (title.length < 2 || !when) return toast("Falta título o fecha", true);
-  const data = { title, notes: String(f.get("notes") || "").trim().slice(0, 200), startsAt: Timestamp.fromMillis(adminInputToMs(when)) };
+  const data = { title, notes: String(f.get("notes") || "").trim().slice(0, 200), startsAt: Timestamp.fromMillis(adminInputToMs(when)),
+    mode: MODES.includes(f.get("mode")) ? String(f.get("mode")) : "", minPlayers: Math.max(0, Math.min(200, parseInt(f.get("minPlayers"), 10) || 0)) };
   const code = String(f.get("lobbyCode") || "").trim().slice(0, 60);
   const link = String(f.get("lobbyLink") || "").trim().slice(0, 300);
   if (link && !/^https:\/\//.test(link)) return toast("El enlace debe empezar con https://", true);
@@ -794,6 +1079,7 @@ function editEvent(id) {
   const f = $("ev-form");
   f.elements.id.value = id; f.elements.title.value = e.title; f.elements.notes.value = e.notes || "";
   f.elements.when.value = msToAdminInput(tsMs(e.startsAt));
+  f.elements.mode.value = e.mode || ""; f.elements.minPlayers.value = e.minPlayers || "";
   const lob = state.lobby.get(id) || {};
   f.elements.lobbyCode.value = lob.code || ""; f.elements.lobbyLink.value = lob.link || "";
   $("ev-form-title").textContent = "Editar partida";
@@ -855,7 +1141,15 @@ async function cancelEvent(id) {
   return run(() => b.commit(), "Partida cancelada");
 }
 function restoreEvent(id) {
-  return run(() => updateDoc(doc(db, "events", id), { status: "active", cancelReason: "" }), "Partida reactivada");
+  const e = state.events.get(id);
+  const b = writeBatch(db);
+  b.update(doc(db, "events", id), { status: "active", cancelReason: "" });
+  // Si el anuncio visible es el de esta cancelación, se quita.
+  const a = state.announcement;
+  if (a?.active && e && String(a.text || "").startsWith(`❌ Cancelada: ${e.title}`)) {
+    b.set(doc(db, "settings", "announcement"), { ...a, active: false, updatedAt: serverTimestamp(), updatedBy: myEmail() });
+  }
+  return run(() => b.commit(), "Partida reactivada");
 }
 function fallbackToForm() {
   const f = $("ev-form"); resetEventForm();
@@ -1040,8 +1334,8 @@ async function closeEvent(eventId) {
     if (!(await run(() => b.commit()))) return;
   }
   const reqs = state.joinreqs;
-  for (let i = 0; i < reqs.length; i += 400) {
-    const b = writeBatch(db); reqs.slice(i, i + 400).forEach((x) => b.delete(doc(db, "joinreqs", x.id))); await run(() => b.commit());
+  for (let i = 0; i < reqs.length; i += 100) {
+    const b = writeBatch(db); reqs.slice(i, i + 100).forEach((x) => b.delete(doc(db, "joinreqs", x.id))); await run(() => b.commit());
   }
   toast("Partida cerrada. Alineación guardada y equipos liberados.");
   openResults(eventId);
@@ -1055,10 +1349,18 @@ function setRsvp(eventId, going) {
   return run(() => setDoc(ref, { eventId, uid, going, at: serverTimestamp() }), going ? "¡Confirmado! Te esperamos" : "Anotado: no vas");
 }
 
-function addAdmin(form) {
+function adminInviteLink(email) {
+  const text = `👋 Te hice admin de ${SITE.title}.\n1) Abre ${siteUrl()} en Chrome o Safari.\n2) Toca "Entrar" y usa EXACTAMENTE este correo: ${email}\n3) Te aparecerá la pestaña Admin.\nSi usas correo y contraseña, primero verifica tu correo.`;
+  return `https://wa.me/?text=${encodeURIComponent(text)}`;
+}
+async function addAdmin(form) {
   const email = String(new FormData(form).get("email") || "").trim().toLowerCase();
-  if (!email.includes("@")) return toast("Correo no válido", true);
-  return run(() => setDoc(doc(db, "admins", email), { addedAt: serverTimestamp(), addedBy: myEmail() }), `${email} ahora es admin`).then((ok) => ok && form.reset());
+  if (!/^[^@\s/]+@[^@\s/]+\.[^@\s/]+$/.test(email)) return toast("Correo no válido", true);
+  const ok = await run(() => setDoc(doc(db, "admins", email), { addedAt: serverTimestamp(), addedBy: myEmail() }), `${email} ahora es admin`);
+  if (ok) {
+    form.reset();
+    if (confirm(`Listo. ¿Le mandas la invitación por WhatsApp a ${email}?\n(No se envía ningún correo automático: debe entrar con ese mismo correo.)`)) window.open(adminInviteLink(email), "_blank");
+  }
 }
 function removeAdmin(email) {
   if (!confirm(`¿Quitar admin a ${email}?`)) return;
@@ -1085,17 +1387,24 @@ document.addEventListener("click", (e) => {
     "req-send": () => sendRequest(team), "req-invite": () => sendInvite(uid), "req-delete": () => deleteReq(id), "req-accept": () => acceptReq(id),
     "admin-assign": () => adminAssign(uid), "auto-build": autoBuild,
     "copy-link": copyLink, "ev-close": () => closeEvent(id),
-    vote: () => vote(id), "sugg-del": () => deleteSuggestion(id), "sugg-schedule": () => scheduleSuggestion(id)
+    vote: () => vote(id), "sugg-del": () => deleteSuggestion(id), "sugg-schedule": () => scheduleSuggestion(id),
+    "email-signin": emailSignIn, "email-signup": emailSignUp, "email-reset": emailReset, "email-verify": resendVerify,
+    "email-refresh": async () => { try { await auth.currentUser.reload(); await auth.currentUser.getIdToken(true); } catch {} location.reload(); },
+    "copy-ref": copyRef, "proof-pick": () => pickProof(b.dataset.event, team), "proof-view": () => viewProofs(id), "proof-del": () => deleteProof(id),
+    "rank-mode": () => { state.rankMode = id; renderRanking(); }, "season-close": closeSeason
   })[act]?.();
 });
 
 document.addEventListener("submit", (e) => {
   const f = e.target.closest("[data-form]"); if (!f) return;
   e.preventDefault();
-  ({ profile: saveProfile, team: createTeam, event: saveEvent, results: saveResults, admin: addAdmin, suggest: addSuggestion, announce: saveAnnouncement })[f.dataset.form]?.(f);
+  ({ profile: saveProfile, team: createTeam, event: saveEvent, results: saveResults, admin: addAdmin, suggest: addSuggestion, announce: saveAnnouncement,
+     "email-login": emailSignIn, mvp: voteMvp, season: saveSeason })[f.dataset.form]?.(f);
 });
 
 $("res-event").addEventListener("change", (e) => renderResultsForm(e.target.value));
+document.querySelector("[data-form=event] [name=mode]").insertAdjacentHTML("beforeend", MODES.map((m) => `<option>${esc(m)}</option>`).join(""));
+document.addEventListener("change", (e) => { if (e.target.id === "rank-country") { state.rankCountry = e.target.value; renderRanking(); } });
 
 let toastTimer;
 function toast(msg, err = false) {

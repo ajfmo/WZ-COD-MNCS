@@ -201,3 +201,29 @@ label.inline input { width: 72px; min-height: 36px; padding: 6px 8px; }
 .dupes { display: grid; gap: 10px; margin-top: 8px; }
 .dupe { border: 1px dashed var(--line); border-radius: var(--radius); padding: 8px; display: grid; gap: 6px; }
 .dupe p { margin: 0; }
+
+/* ---------- v7: referidos, MVP, temporadas, fotos, formato ---------- */
+.flag { font-size: 1.05em; }
+.squad { color: var(--accent); font-family: Oswald, sans-serif; margin-right: 2px; }
+.my-squad { margin: 6px 0; }
+.fmt { margin: 4px 0; color: var(--text); }
+.progress { height: 8px; background: var(--surface-2); border-radius: 99px; overflow: hidden; border: 1px solid var(--line); max-width: 360px; }
+.progress span { display: block; height: 100%; background: var(--accent); }
+.refer { border: 1px solid var(--line); border-radius: var(--radius); padding: 10px; }
+.refer summary { cursor: pointer; }
+.refer input { font-size: 13px; }
+.mvp { margin: 8px 0 4px; }
+.mvp-form { margin-top: 6px; }
+.rank-controls { margin-bottom: 10px; }
+.seg { display: inline-flex; gap: 4px; }
+.hall { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
+.hof { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; }
+.hof h3 { margin: 0; }
+.hof ol { list-style: none; padding: 0; margin: 8px 0 0; display: grid; gap: 4px; }
+.proof { margin: 12px 0; }
+.proof img { width: 100%; border-radius: 8px; border: 1px solid var(--line); }
+.proof figcaption { font-size: 13px; color: var(--muted); margin-top: 4px; }
+small.ok { color: var(--ok); }
+
+.next-extras .progress, .event .progress { width: 100%; }
+.sugg .who b { white-space: normal; }
