@@ -50,6 +50,8 @@ function referrerFor(uid) {
   return [...state.players.values()].find((p) => refCodeOf(p.id) === pendingRef && p.id !== uid) || null;
 }
 const siteUrl = () => location.origin + location.pathname;
+const focusSugg = new URLSearchParams(location.search).get("s") || "";
+let focusDone = false;
 const flag = (cc) => (cc && /^[A-Z]{2}$/.test(cc) ? String.fromCodePoint(...[...cc].map((c) => 0x1f1e6 + c.charCodeAt(0) - 65)) : "");
 const countryName = (cc) => COUNTRIES.find((c) => c[0] === cc)?.[1] || "";
 
@@ -105,7 +107,7 @@ onSnapshot(collection(db, "rsvps"), (s) => {
 }, onErr("las confirmaciones"));
 onSnapshot(collection(db, "handles"), (s) => { state.handles = new Map(s.docs.map((d) => [d.id, d.data().uid])); state.handlesLoaded = true; render(); }, () => {});
 getRedirectResult(auth).catch((e) => loginError(e));
-onSnapshot(collection(db, "suggestions"), (s) => { state.suggestions = s.docs.map((d) => ({ id: d.id, ...d.data() })); if (!document.activeElement?.closest?.("[data-form=suggest]")) renderSuggestions(); }, onErr("las sugerencias"));
+onSnapshot(collection(db, "suggestions"), (s) => { state.suggestions = s.docs.map((d) => ({ id: d.id, ...d.data() })); state.suggestionsLoaded = true; if (!document.activeElement?.closest?.("[data-form=suggest]")) renderSuggestions(); }, onErr("las sugerencias"));
 onSnapshot(doc(db, "settings", "announcement"), (d) => { state.announcement = d.exists() ? d.data() : null; renderAnnouncement(); }, () => {});
 onSnapshot(collection(db, "mvpvotes"), (s) => {
   const m = new Map();
@@ -1251,21 +1253,46 @@ function renderSuggestions() {
       <button class="btn primary">Sugerir</button>
     </form><p class="muted small">Escribe la hora en ${ADMIN_TZ.label}.</p>`
     : `<p class="muted small">${state.user ? "Regístrate" : "Entra y regístrate"} para sugerir horarios y votar.</p>`;
-  if (!list.length) { box.innerHTML = `<div class="empty-note">Aún no hay sugerencias.</div>`; return; }
-  box.innerHTML = list.map((x) => {
-    const votes = x.votes || [];
-    const mine = p && votes.includes(p.id);
-    const author = state.players.get(x.uid)?.gamertag || "Alguien";
-    const canDel = state.isAdmin || (p && x.uid === p.id);
-    return `<div class="sugg">
-      <div class="who"><b>${esc(fmt(x.ms, ADMIN_TZ.id))}</b><small>${esc(author)}${x.note ? " · " + esc(x.note) : ""}${localTz !== ADMIN_TZ.id ? ` · ${esc(fmtTime(x.ms, localTz))} tu hora` : ""}</small></div>
-      <span class="btns">
-        <button class="btn sm ${mine ? "primary" : ""}" ${p ? "" : "disabled"} data-act="vote" data-id="${x.id}">👍 ${votes.length}</button>
-        ${state.isAdmin ? `<button class="btn sm" data-act="sugg-schedule" data-id="${x.id}">Agendar</button>` : ""}
-        ${canDel ? `<button class="btn sm danger" data-act="sugg-del" data-id="${x.id}" title="Borrar">✕</button>` : ""}
-      </span>
-    </div>`;
-  }).join("");
+  box.innerHTML = list.length ? list.map((x) => suggCard(x, p)).join("") : `<div class="empty-note">Aún no hay sugerencias.</div>`;
+  // Inicio: las más votadas (y la del link compartido, si llegó por ahí)
+  const focus = list.find((x) => x.id === focusSugg);
+  const top = list.slice(0, 3);
+  if (focus && !top.includes(focus)) top.unshift(focus);
+  $("home-sugg-wrap").hidden = !top.length;
+  $("home-sugg").innerHTML = top.map((x) => suggCard(x, p, { home: true })).join("") +
+    (!p ? `<p class="small muted">${state.user ? "Crea tu perfil" : `<button class="linkish small" data-act="login">Entra</button> y crea tu perfil`} para votar.</p>` : "");
+  if (focusSugg && !focusDone && state.loaded.events) {
+    if (focus) {
+      focusDone = true;
+      if (currentTab() !== "inicio") location.hash = "#inicio";
+      setTimeout(() => document.querySelector(`#home-sugg [data-sugg="${CSS.escape(focus.id)}"]`)?.scrollIntoView({ behavior: "smooth", block: "center" }), 120);
+    } else if (state.suggestionsLoaded) { focusDone = true; toast("Esa sugerencia ya no está disponible (pasó la fecha o la borraron).", true); }
+  }
+}
+function suggLink(x) {
+  const p = me();
+  return `${siteUrl()}?s=${encodeURIComponent(x.id)}${p ? `&ref=${refCodeOf(p.id)}` : ""}`;
+}
+function suggCard(x, p, { home = false } = {}) {
+  const votes = x.votes || [];
+  const mine = p && votes.includes(p.id);
+  const author = state.players.get(x.uid)?.gamertag || "Alguien";
+  const canDel = state.isAdmin || (p && x.uid === p.id);
+  const share = `https://wa.me/?text=${encodeURIComponent(`🗳️ ¿Jugamos ${fmt(x.ms, ADMIN_TZ.id)} (${ADMIN_TZ.label})?${x.note ? " " + x.note : ""}\nVota aquí 👉 ${suggLink(x)}`)}`;
+  return `<div class="sugg ${x.id === focusSugg ? "focus" : ""}" data-sugg="${esc(x.id)}">
+    <div class="who"><b>${esc(fmt(x.ms, ADMIN_TZ.id))}</b><small>${esc(author)}${x.note ? " · " + esc(x.note) : ""}${localTz !== ADMIN_TZ.id ? ` · ${esc(fmtTime(x.ms, localTz))} tu hora` : ""}</small>
+      <span class="row sugg-share"><a class="btn sm wa" target="_blank" rel="noopener" href="${share}">Compartir</a><button class="btn sm" data-act="sugg-copy" data-id="${esc(x.id)}">Copiar link</button></span></div>
+    <span class="btns">
+      <button class="btn sm ${mine ? "primary" : ""}" ${p ? "" : "disabled"} data-act="vote" data-id="${x.id}" title="${p ? (mine ? "Quitar mi voto" : "Votar") : "Entra para votar"}">👍 ${votes.length}</button>
+      ${!home && state.isAdmin ? `<button class="btn sm" data-act="sugg-schedule" data-id="${x.id}">Agendar</button>` : ""}
+      ${!home && canDel ? `<button class="btn sm danger" data-act="sugg-del" data-id="${x.id}" title="Borrar">✕</button>` : ""}
+    </span>
+  </div>`;
+}
+async function copySuggLink(id) {
+  const x = state.suggestions.find((y) => y.id === id); if (!x) return;
+  const url = suggLink({ ...x, ms: tsMs(x.startsAt) });
+  try { await navigator.clipboard.writeText(url); toast("Link copiado"); } catch { prompt("Copia el link:", url); }
 }
 function addSuggestion(form) {
   const f = new FormData(form); const when = String(f.get("when") || "");
@@ -1446,7 +1473,7 @@ document.addEventListener("click", (e) => {
     "req-send": () => sendRequest(team), "req-invite": () => sendInvite(uid), "req-delete": () => deleteReq(id), "req-accept": () => acceptReq(id),
     "admin-assign": () => adminAssign(uid), "auto-build": autoBuild,
     "copy-link": copyLink, "ev-close": () => closeEvent(id),
-    vote: () => vote(id), "sugg-del": () => deleteSuggestion(id), "sugg-schedule": () => scheduleSuggestion(id),
+    vote: () => vote(id), "sugg-copy": () => copySuggLink(id), "sugg-del": () => deleteSuggestion(id), "sugg-schedule": () => scheduleSuggestion(id),
     "email-signin": emailSignIn, "email-signup": emailSignUp, "email-reset": emailReset, "email-verify": resendVerify,
     "email-refresh": async () => { try { await auth.currentUser.reload(); await auth.currentUser.getIdToken(true); } catch {} location.reload(); },
     "copy-ref": copyRef, ics: () => downloadIcs(id), "proof-pick": () => pickProof(b.dataset.event, team), "proof-view": () => viewProofs(id), "proof-del": () => deleteProof(id),

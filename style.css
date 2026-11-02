@@ -233,3 +233,8 @@ small.ok { color: var(--ok); }
 .my-profile .panel h2 { margin-bottom: 8px; }
 .steps { margin: 4px 0 14px; padding-left: 20px; display: grid; gap: 4px; color: var(--muted); }
 .steps b { color: var(--text); }
+
+/* ---------- v9: links de sugerencias ---------- */
+.sugg { align-items: flex-start; }
+.sugg-share { gap: 6px; margin-top: 6px; }
+.sugg.focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(242,161,43,.35); }

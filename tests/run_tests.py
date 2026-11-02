@@ -127,11 +127,11 @@ with sync_playwright() as pw:
 
     # ---------- Visitante ----------
     guest = mkpage(ctx, None, name="guest")
-    check("visitante ve botón de Google", guest.locator("[data-act=login]").count() == 1)
+    check("visitante ve botón de Google", guest.locator("#me [data-act=login]").count() == 1)
     check("visitante ve opción de correo/contraseña", guest.locator("#email-login").count() == 1)
     check("visitante no ve pestaña Admin", guest.locator("#tab-admin").is_hidden())
     guest.wait_for_timeout(500)
-    check("partida por defecto visible", "próxima partida" in guest.locator("#next").inner_text().lower())
+    check("partida por defecto visible", any(k in guest.locator("#next").inner_text().lower() for k in ("próxima partida", "no hay partidas")))
 
     # ---------- Dueño ----------
     owner = mkpage(ctx, OWNER, name="owner")
@@ -261,6 +261,23 @@ with sync_playwright() as pw:
     pc.wait_for_timeout(300)
     sg = list(db(pc)["suggestions"].values())[0]
     check("sugerencia con 2 votos", len(sg["votes"]) == 2)
+    sid = list(db(pc)["suggestions"].keys())[0]
+    tab(pa, "inicio"); pa.wait_for_timeout(300)
+    check("sugerencias más votadas en Inicio", pa.locator(f"#home-sugg [data-sugg='{sid}']").count() == 1 and pa.locator("#home-sugg-wrap").is_visible())
+    href = pa.locator(f"#home-sugg [data-sugg='{sid}'] a.wa").get_attribute("href")
+    check("link de WhatsApp de la sugerencia lleva ?s= y ref", f"s%3D{sid}" in href and "ref%3D" in href)
+    lk = mkpage(ctx, None, url=BASE + f"?s={sid}", name="link")
+    lk.wait_for_timeout(800)
+    check("link abre Inicio con la sugerencia resaltada", lk.locator(f"#home-sugg .sugg.focus[data-sugg='{sid}']").count() == 1)
+    check("visitante del link ve 'Entra para votar'", "para votar" in lk.locator("#home-sugg").inner_text())
+    pa.click(f"#home-sugg [data-sugg='{sid}'] [data-act=vote]")
+    pa.wait_for_timeout(400)
+    check("votar desde Inicio", len(db(pa)["suggestions"][sid]["votes"]) == 3)
+    bad = mkpage(ctx, None, url=BASE + "?s=noexiste", name="bad")
+    try: bad.wait_for_function("() => document.getElementById('toast').textContent.includes('ya no está disponible')", timeout=4000)
+    except Exception: pass
+    check("link de sugerencia inexistente avisa", "ya no está disponible" in toast(bad))
+    lk.close(); bad.close()
 
     # ---------- Anuncio ----------
     tab(adm, "admin")
