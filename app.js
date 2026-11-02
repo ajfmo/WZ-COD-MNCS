@@ -18,7 +18,7 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 $("site-title").textContent = SITE.title;
 $("site-sub").textContent = SITE.subtitle;
 document.title = SITE.title;
-document.querySelectorAll(".tz-label").forEach((e) => (e.textContent = ADMIN_TZ.label));
+document.querySelectorAll(".tz-label").forEach((e) => (e.textContent = "tu hora local"));
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
@@ -68,25 +68,20 @@ const IN_APP = /FBAN|FBAV|FB_IAB|Instagram|Line\/|Snapchat|TikTok|musical_ly|Twi
 // ---------- Fechas ----------
 const tsMs = (t) => (t?.toMillis ? t.toMillis() : t?.seconds ? t.seconds * 1000 : typeof t === "string" ? Date.parse(t) : 0);
 const localTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-function fmt(ms, tz) {
-  return new Intl.DateTimeFormat("es-VE", { weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit", hour12: true, timeZone: tz }).format(ms);
+// Todas las horas se muestran en la zona horaria de quien ve la página.
+function fmt(ms) {
+  return new Intl.DateTimeFormat("es", { weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit", hour12: true }).format(ms);
 }
-function fmtTime(ms, tz) {
-  return new Intl.DateTimeFormat("es-VE", { hour: "numeric", minute: "2-digit", hour12: true, timeZone: tz }).format(ms);
+// Para textos que se comparten (WhatsApp, anuncios): incluye la zona, p. ej. "GMT-4".
+function fmtZ(ms) {
+  return new Intl.DateTimeFormat("es", { weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit", hour12: true, timeZoneName: "short" }).format(ms);
 }
-function whenLine(ms) {
-  const ve = `${fmt(ms, ADMIN_TZ.id)} (${ADMIN_TZ.label})`;
-  if (localTz === ADMIN_TZ.id) return ve;
-  const sameDay = new Intl.DateTimeFormat("en-CA", { timeZone: localTz }).format(ms) === new Intl.DateTimeFormat("en-CA", { timeZone: ADMIN_TZ.id }).format(ms);
-  return `${ve} · ${sameDay ? fmtTime(ms, localTz) : fmt(ms, localTz)} tu hora`;
-}
-// datetime-local (en hora de admin) <-> ms
-function adminInputToMs(v) {
-  const [d, t] = v.split("T"); const [y, m, day] = d.split("-").map(Number); const [h, min] = t.split(":").map(Number);
-  return Date.UTC(y, m - 1, day, h - ADMIN_TZ.offsetHours, min);
-}
+function whenLine(ms) { return `${fmt(ms)} (tu hora)`; }
+// datetime-local se interpreta en la hora local de quien lo escribe
+function adminInputToMs(v) { return new Date(v).getTime(); }
 function msToAdminInput(ms) {
-  return new Date(ms + ADMIN_TZ.offsetHours * 3600e3).toISOString().slice(0, 16);
+  const d = new Date(ms), z = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())}T${z(d.getHours())}:${z(d.getMinutes())}`;
 }
 function countdown(ms) {
   const diff = ms - Date.now();
@@ -296,7 +291,7 @@ function nextEvent() {
 }
 function shareLink(e) {
   const url = location.origin + location.pathname;
-  const text = `🎮 ${e.title}\n🗓️ ${fmt(e.ms, ADMIN_TZ.id)} (${ADMIN_TZ.label})${e.notes ? "\n📝 " + e.notes : ""}\n👉 Regístrate, confirma y arma tu equipo: ${url}`;
+  const text = `🎮 ${e.title}\n🗓️ ${fmtZ(e.ms)}${e.notes ? "\n📝 " + e.notes : ""}\n👉 Regístrate, confirma y arma tu equipo: ${url}`;
   return `https://wa.me/?text=${encodeURIComponent(text)}`;
 }
 function eventExtras(e, { showNames = true } = {}) {
@@ -580,7 +575,7 @@ function renderRanking() {
       <td>${i + 1}</td><td>${flag(p.country)} ${nameBtn(p.id, p.gamertag)}</td><td><b>${s.points}</b></td><td>${s.games}</td><td>${s.kills}</td><td>${s.wins}</td><td>${s.mvps}</td></tr>`).join("")
       : `<tr><td colspan="7" class="muted">Aún no hay jugadores.</td></tr>`) + `</tbody>`;
   const hof = [...state.seasons].sort((a, b) => tsMs(b.endsAt) - tsMs(a.endsAt));
-  $("hall").innerHTML = hof.length ? hof.map((x) => `<div class="hof"><h3>${esc(x.name)}</h3><p class="small muted">${esc(fmt(tsMs(x.startsAt), ADMIN_TZ.id))} → ${esc(fmt(tsMs(x.endsAt), ADMIN_TZ.id))}</p>
+  $("hall").innerHTML = hof.length ? hof.map((x) => `<div class="hof"><h3>${esc(x.name)}</h3><p class="small muted">${esc(fmt(tsMs(x.startsAt)))} → ${esc(fmt(tsMs(x.endsAt)))}</p>
       <ol>${(x.top || []).map((t, i) => `<li>${["🥇", "🥈", "🥉"][i] || ""} <b>${esc(t.gamertag)}</b> <span class="muted">${t.points} pts</span></li>`).join("")}</ol></div>`).join("")
     : `<p class="muted small">Cuando un admin cierre una temporada, sus campeones quedan aquí.</p>`;
 }
@@ -590,7 +585,7 @@ function renderTeams() {
   $("teams-count").textContent = list.length ? `${list.length} equipos` : "";
   const ev = nextEvent();
   $("teams-for").innerHTML = ev
-    ? `Equipos para <b>${esc(ev.title)}</b> · ${esc(fmt(ev.ms, ADMIN_TZ.id))}. Al terminar la partida, un admin la cierra: se guarda la alineación y todos vuelven al pool para rearmar.${state.isAdmin && ev.id ? ` <button class="btn sm" data-act="ev-close" data-id="${ev.id}">Cerrar partida y liberar equipos</button>` : ""}`
+    ? `Equipos para <b>${esc(ev.title)}</b> · ${esc(fmt(ev.ms))}. Al terminar la partida, un admin la cierra: se guarda la alineación y todos vuelven al pool para rearmar.${state.isAdmin && ev.id ? ` <button class="btn sm" data-act="ev-close" data-id="${ev.id}">Cerrar partida y liberar equipos</button>` : ""}`
     : `Los equipos se arman para cada partida.`;
   if (!state.loaded.teams) { $("teams").innerHTML = `<p class="muted">Cargando…</p>`; return; }
   if (!list.length) { $("teams").innerHTML = `<div class="empty-note">Aún no hay equipos. ¡Crea el primero!</div>`; return; }
@@ -783,7 +778,7 @@ function renderSeasonForm() {
   const f = $("season-form"); if (!f || document.activeElement?.form === f) return;
   f.elements.name.value = state.season?.name || "";
   f.elements.start.value = state.season?.startsAt ? msToAdminInput(tsMs(state.season.startsAt)) : "";
-  $("season-info").textContent = state.season?.startsAt ? `Temporada actual: ${state.season.name} (desde ${fmt(tsMs(state.season.startsAt), ADMIN_TZ.id)})` : "No hay temporada activa: el ranking muestra el histórico.";
+  $("season-info").textContent = state.season?.startsAt ? `Temporada actual: ${state.season.name} (desde ${fmt(tsMs(state.season.startsAt))})` : "No hay temporada activa: el ranking muestra el histórico.";
 }
 function saveSeason(form) {
   const f = new FormData(form);
@@ -816,7 +811,7 @@ function profileBody(uid, { mine = false } = {}) {
   const badges = badgesFor(uid, s).map(([i, n, d]) => `<span class="badge" title="${esc(d)}">${i} ${esc(n)}</span>`).join("");
   const hist = s.history.length
     ? `<div class="table-wrap"><table class="rank"><thead><tr><th>Partida</th><th>Equipo</th><th>Pos.</th><th>Kills</th><th>Pts</th></tr></thead><tbody>${
-        s.history.map((h) => `<tr><td>${esc(h.title)}${h.mvp ? " 🌟" : ""}<br><small class="muted">${h.ms ? esc(fmt(h.ms, ADMIN_TZ.id)) : ""}</small></td><td>${esc(h.teamName || "—")}${h.captain ? " ★" : ""}</td><td>${placeLabel(h.place)}</td><td>${h.kills}</td><td>${h.pts}</td></tr>`).join("")
+        s.history.map((h) => `<tr><td>${esc(h.title)}${h.mvp ? " 🌟" : ""}<br><small class="muted">${h.ms ? esc(fmt(h.ms)) : ""}</small></td><td>${esc(h.teamName || "—")}${h.captain ? " ★" : ""}</td><td>${placeLabel(h.place)}</td><td>${h.kills}</td><td>${h.pts}</td></tr>`).join("")
       }</tbody></table></div>`
     : `<p class="muted">Aún sin partidas registradas.</p>`;
   return `
@@ -854,14 +849,14 @@ function renderDupes() {
   }
   box.innerHTML = out.length ? out.map((g) => `<div class="dupe"><p class="small muted">${g.why}</p>${g.ids.map((id) => {
       const p = state.players.get(id);
-      return `<div class="slot">${playerLine(p, "")}<span class="btns"><small class="muted">${p.createdAt ? esc(fmt(tsMs(p.createdAt), ADMIN_TZ.id)) : ""}</small>${!p.teamId && id !== state.user?.uid ? `<button class="btn sm danger" data-act="admin-del-player" data-uid="${id}">Borrar</button>` : ""}</span></div>`;
+      return `<div class="slot">${playerLine(p, "")}<span class="btns"><small class="muted">${p.createdAt ? esc(fmt(tsMs(p.createdAt))) : ""}</small>${!p.teamId && id !== state.user?.uid ? `<button class="btn sm danger" data-act="admin-del-player" data-uid="${id}">Borrar</button>` : ""}</span></div>`;
     }).join("")}</div>`).join("") : `<p class="muted small">No se detectan registros duplicados.</p>`;
 }
 function renderAdmins() {
   $("admins-panel").hidden = !isOwner();
   if (!isOwner()) return;
   $("admins").innerHTML = state.admins.length
-    ? state.admins.map((a) => `<li><span>${esc(a.email)}<br><small class="${a.lastSeen ? "ok" : "muted"}">${a.lastSeen ? `✅ Ya entró como admin (${esc(fmt(tsMs(a.lastSeen), ADMIN_TZ.id))})` : "⏳ Aún no ha entrado con este correo"}</small></span>
+    ? state.admins.map((a) => `<li><span>${esc(a.email)}<br><small class="${a.lastSeen ? "ok" : "muted"}">${a.lastSeen ? `✅ Ya entró como admin (${esc(fmt(tsMs(a.lastSeen)))})` : "⏳ Aún no ha entrado con este correo"}</small></span>
         <span class="btns"><a class="btn sm wa" target="_blank" rel="noopener" href="${adminInviteLink(a.email)}">Invitar</a><button class="btn sm danger" data-act="admin-remove" data-email="${esc(a.email)}">Quitar</button></span></li>`).join("")
     : `<li class="muted">Todavía no hay otros admins.</li>`;
 }
@@ -872,7 +867,7 @@ function renderResultsSelect() {
   const prev = sel.value;
   const evs = [...state.events.values()].map((e) => ({ ...e, ms: tsMs(e.startsAt) })).sort((a, b) => b.ms - a.ms);
   sel.innerHTML = `<option value="">Elige una partida…</option>` +
-    evs.map((e) => `<option value="${e.id}">${esc(fmt(e.ms, ADMIN_TZ.id))} · ${esc(e.title)}${state.results.has(e.id) ? " ✓" : ""}</option>`).join("");
+    evs.map((e) => `<option value="${e.id}">${esc(fmt(e.ms))} · ${esc(e.title)}${state.results.has(e.id) ? " ✓" : ""}</option>`).join("");
   if (prev && state.events.has(prev)) sel.value = prev;
 }
 
@@ -1196,7 +1191,7 @@ async function cancelEvent(id) {
   const b = writeBatch(db);
   b.update(doc(db, "events", id), { status: "cancelled", cancelReason: r });
   if (announce) b.set(doc(db, "settings", "announcement"), {
-    text: `❌ Cancelada: ${e.title} (${fmt(tsMs(e.startsAt), ADMIN_TZ.id)})${r ? ". " + r : ""}`.slice(0, 280),
+    text: `❌ Cancelada: ${e.title} (${fmtZ(tsMs(e.startsAt))})${r ? ". " + r : ""}`.slice(0, 280),
     kind: "warning", active: true, updatedAt: serverTimestamp(), updatedBy: myEmail()
   });
   return run(() => b.commit(), "Partida cancelada");
@@ -1248,10 +1243,10 @@ function renderSuggestions() {
     .sort((a, b) => (b.votes?.length || 0) - (a.votes?.length || 0) || a.ms - b.ms);
   const p = me();
   $("sugg-form-wrap").innerHTML = p ? `<form data-form="suggest" class="row">
-      <input type="datetime-local" name="when" required style="flex:1;min-width:200px" aria-label="Fecha y hora (${ADMIN_TZ.label})">
+      <input type="datetime-local" name="when" required style="flex:1;min-width:200px" aria-label="Fecha y hora (tu hora local)">
       <input name="note" maxlength="100" placeholder="Comentario (opcional)" style="flex:2;min-width:180px">
       <button class="btn primary">Sugerir</button>
-    </form><p class="muted small">Escribe la hora en ${ADMIN_TZ.label}.</p>`
+    </form><p class="muted small">Escribe la hora en tu hora local; cada quien la verá en la suya.</p>`
     : `<p class="muted small">${state.user ? "Regístrate" : "Entra y regístrate"} para sugerir horarios y votar.</p>`;
   box.innerHTML = list.length ? list.map((x) => suggCard(x, p)).join("") : `<div class="empty-note">Aún no hay sugerencias.</div>`;
   // Inicio: las más votadas (y la del link compartido, si llegó por ahí)
@@ -1278,9 +1273,9 @@ function suggCard(x, p, { home = false } = {}) {
   const mine = p && votes.includes(p.id);
   const author = state.players.get(x.uid)?.gamertag || "Alguien";
   const canDel = state.isAdmin || (p && x.uid === p.id);
-  const share = `https://wa.me/?text=${encodeURIComponent(`🗳️ ¿Jugamos ${fmt(x.ms, ADMIN_TZ.id)} (${ADMIN_TZ.label})?${x.note ? " " + x.note : ""}\nVota aquí 👉 ${suggLink(x)}`)}`;
+  const share = `https://wa.me/?text=${encodeURIComponent(`🗳️ ¿Jugamos ${fmtZ(x.ms)}?${x.note ? " " + x.note : ""}\nVota aquí 👉 ${suggLink(x)}`)}`;
   return `<div class="sugg ${x.id === focusSugg ? "focus" : ""}" data-sugg="${esc(x.id)}">
-    <div class="who"><b>${esc(fmt(x.ms, ADMIN_TZ.id))}</b><small>${esc(author)}${x.note ? " · " + esc(x.note) : ""}${localTz !== ADMIN_TZ.id ? ` · ${esc(fmtTime(x.ms, localTz))} tu hora` : ""}</small>
+    <div class="who"><b>${esc(fmt(x.ms))}</b><small>${esc(author)}${x.note ? " · " + esc(x.note) : ""}</small>
       <span class="row sugg-share"><a class="btn sm wa" target="_blank" rel="noopener" href="${share}">Compartir</a><button class="btn sm" data-act="sugg-copy" data-id="${esc(x.id)}">Copiar link</button></span></div>
     <span class="btns">
       <button class="btn sm ${mine ? "primary" : ""}" ${p ? "" : "disabled"} data-act="vote" data-id="${x.id}" title="${p ? (mine ? "Quitar mi voto" : "Votar") : "Entra para votar"}">👍 ${votes.length}</button>

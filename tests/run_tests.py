@@ -120,7 +120,7 @@ tomorrow = (datetime.datetime.now(datetime.UTC).replace(tzinfo=None) + datetime.
 
 with sync_playwright() as pw:
     browser = pw.chromium.launch(executable_path="/usr/bin/google-chrome", args=["--no-sandbox"])
-    ctx = browser.new_context(viewport={"width": 390, "height": 844})
+    ctx = browser.new_context(viewport={"width": 390, "height": 844}, timezone_id="America/Caracas")
     ctx.route("https://www.gstatic.com/firebasejs/**", lambda r: r.fulfill(path=os.path.join(MOCK, r.request.url.split("/")[-1]), content_type="text/javascript"))
     ctx.route("https://fonts.googleapis.com/**", lambda r: r.fulfill(body="", content_type="text/css"))
     ctx.route("https://fonts.gstatic.com/**", lambda r: r.abort())
@@ -400,6 +400,19 @@ with sync_playwright() as pw:
     em.click("[data-act=email-signin]")
     wait_toast(em, "incorrectos")
     check("contraseña incorrecta da mensaje claro", "incorrectos" in toast(em))
+
+    # ---------- Zonas horarias ----------
+    def tz_text(tzid):
+        c = browser.new_context(viewport={"width": 390, "height": 844}, timezone_id=tzid)
+        c.route("https://www.gstatic.com/firebasejs/**", lambda r: r.fulfill(path=os.path.join(MOCK, r.request.url.split("/")[-1]), content_type="text/javascript"))
+        c.route("https://fonts.**", lambda r: r.abort())
+        pg = c.new_page(); pg.goto(BASE); pg.wait_for_timeout(900)
+        t = pg.locator("#next").inner_text(); c.close(); return t
+    ve, ny, md = tz_text("America/Caracas"), tz_text("America/New_York"), tz_text("Europe/Madrid")
+    check("Venezuela ve 7:00 p. m. (tu hora)", "7:00 p. m. (tu hora)" in ve, ve[:120])
+    check("Nueva York ve 6:00 p. m.", "6:00 p. m. (tu hora)" in ny, ny[:120])
+    check("Madrid ve 12:00 a. m. del día siguiente", "12:00 a. m. (tu hora)" in md, md[:120])
+    check("ya no dice 'hora Venezuela'", "Venezuela" not in ve + ny + md)
 
     # ---------- Navegador dentro de Instagram ----------
     ig = browser.new_context(user_agent="Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Instagram 300.0", viewport={"width": 390, "height": 844})
