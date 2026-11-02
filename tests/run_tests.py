@@ -141,7 +141,9 @@ with sync_playwright() as pw:
     d = db(owner)
     check("perfil del dueño creado con país y rol", d["players"][OWNER["uid"]]["country"] == "VE" and d["players"][OWNER["uid"]]["role"] == "Líder (IGL)")
     check("handles reservados (gamertag y Activision ID)", d["handles"].get("g_adrian") == {"uid": OWNER["uid"]} and d["handles"].get("a_adrian#111") == {"uid": OWNER["uid"]})
-    check("bandera en el panel", "🇻🇪" in owner.locator("body").inner_text())
+    owner.wait_for_timeout(300)
+    loaded = owner.evaluate("() => { const i = document.querySelector('#me img.flag'); return i ? [i.getAttribute('src'), i.complete && i.naturalWidth > 0] : null }")
+    check("bandera en el panel (imagen cargada)", loaded == ["flags/ve.svg", True], str(loaded))
 
     # crear partida
     tab(owner, "admin")
@@ -356,7 +358,7 @@ with sync_playwright() as pw:
     pa.select_option("#rank-country", ""); pa.wait_for_timeout(100)
     pa.click("#rank [data-act=profile][data-uid='%s']" % PA["uid"])
     prof = pa.locator("#profile").inner_text()
-    check("perfil con historial, MVP y bandera", "🇨🇴" in prof and "Privada de prueba" in prof and "MVP" in prof)
+    check("perfil con historial, MVP y bandera", pa.locator("#profile img.flag[src='flags/co.svg']").count() == 1 and "Privada de prueba" in prof and "MVP" in prof)
     pa.click("#profile [data-act=close-profile]")
 
     # ---------- Ver marcadores ----------

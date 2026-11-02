@@ -330,3 +330,7 @@ label > span { display: block; }
 .admin-bar { border-top: 1px solid var(--line); padding-top: 10px; margin-top: 12px; gap: 5px; }
 .admin-bar .btn { font-size: 12px; padding: 3px 9px; min-height: 28px; }
 .panel .stat span, dialog .stat span { white-space: normal; overflow: visible; }
+
+/* Banderas (imágenes) */
+img.flag { display: inline-block; width: 1.3em; height: .975em; object-fit: cover; vertical-align: -0.12em; border-radius: 2px; box-shadow: 0 0 0 1px rgba(255,255,255,.14); }
+h2 img.flag { width: 1.15em; height: .86em; vertical-align: -0.05em; }

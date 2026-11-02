@@ -57,7 +57,10 @@ function referrerFor(uid) {
 const siteUrl = () => location.origin + location.pathname;
 const focusSugg = new URLSearchParams(location.search).get("s") || "";
 let focusDone = false;
-const flag = (cc) => (cc && /^[A-Z]{2}$/.test(cc) ? String.fromCodePoint(...[...cc].map((c) => 0x1f1e6 + c.charCodeAt(0) - 65)) : "");
+// Banderas como imágenes (Windows no tiene emojis de banderas). Fuente: flag-icons (MIT), en /flags.
+const FLAG_CODES = new Set(COUNTRIES.map((c) => c[0]));
+const flag = (cc) => (cc && FLAG_CODES.has(cc)
+  ? `<img class="flag" src="flags/${cc.toLowerCase()}.svg" alt="${esc(countryName(cc))}" title="${esc(countryName(cc))}" width="20" height="15" loading="lazy" decoding="async">` : "");
 const countryName = (cc) => COUNTRIES.find((c) => c[0] === cc)?.[1] || "";
 
 // ---------- Nombres únicos ----------
@@ -391,7 +394,7 @@ function playerLine(p, extra = "") {
   if (!p) return `<div class="who"><b>(jugador eliminado)</b></div>`;
   const bits = [p.platform, p.role, p.activisionId, p.mic ? "🎙️" : "sin micro"].filter(Boolean).map(esc).join(" · ");
   const f = flag(p.country);
-  return `<div class="who"><b>${f ? `<span class="flag" title="${esc(countryName(p.country))}">${f}</span> ` : ""}${nameBtn(p.id, p.gamertag)}${extra}</b><small>${bits}</small></div>`;
+  return `<div class="who"><b>${f ? `${f} ` : ""}${nameBtn(p.id, p.gamertag)}${extra}</b><small>${bits}</small></div>`;
 }
 
 function renderMe() {
@@ -470,7 +473,7 @@ function renderMe() {
   const badges = badgesFor(p.id, s).map(([i, n, d]) => `<span class="badge" title="${esc(d)}">${i} ${esc(n)}</span>`).join("");
   el.innerHTML = head + `
     <div class="me-top">
-      <h2>${flag(p.country) ? `<span class="flag">${flag(p.country)}</span> ` : ""}${esc(p.gamertag)}</h2>
+      <h2>${flag(p.country) ? `${flag(p.country)} ` : ""}${esc(p.gamertag)}</h2>
       <div class="me-pts"><b>${s.points}</b><span>puntos</span></div>
     </div>
     <div class="badges">${badges}</div>
@@ -536,7 +539,7 @@ function profileForm(p) {
       <label>Gamertag (cómo te llamamos)<input name="gamertag" required minlength="2" maxlength="24" value="${esc(p.gamertag)}"></label>
       <label>Activision ID<input name="activisionId" maxlength="40" placeholder="Nombre#1234567" value="${esc(p.activisionId)}"></label>
       <label>Plataforma<select name="platform">${PLATFORMS.map((x) => `<option ${p.platform === x ? "selected" : ""}>${x}</option>`).join("")}</select></label>
-      <label>País (opcional)<select name="country"><option value="">—</option>${COUNTRIES.map(([c, n]) => `<option value="${c}" ${p.country === c ? "selected" : ""}>${flag(c)} ${esc(n)}</option>`).join("")}</select></label>
+      <label>País (opcional)<select name="country"><option value="">—</option>${COUNTRIES.map(([c, n]) => `<option value="${c}" ${p.country === c ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></label>
       <label>Rol preferido (opcional)<select name="role"><option value="">—</option>${ROLES.map((x) => `<option ${p.role === x ? "selected" : ""}>${esc(x)}</option>`).join("")}</select></label>
     </div>
     <label>Link de tu tracker (opcional)<input name="trackerUrl" type="url" maxlength="200" placeholder="https://cod.tracker.gg/…" value="${esc(p.trackerUrl)}"></label>
@@ -579,7 +582,7 @@ function renderRanking() {
     ${hasSeason ? `<div class="seg">
       <button class="btn sm ${mode === "season" ? "primary" : ""}" data-act="rank-mode" data-id="season">${esc(state.season.name || "Temporada")}</button>
       <button class="btn sm ${mode === "all" ? "primary" : ""}" data-act="rank-mode" data-id="all">Histórico</button></div>` : ""}
-    ${used.length ? `<select id="rank-country" style="width:auto"><option value="">🌎 Todos los países</option>${used.map((c) => `<option value="${c}" ${state.rankCountry === c ? "selected" : ""}>${flag(c)} ${esc(countryName(c))}</option>`).join("")}</select>` : ""}`;
+    ${used.length ? `<select id="rank-country" style="width:auto"><option value="">🌎 Todos los países</option>${used.map((c) => `<option value="${c}" ${state.rankCountry === c ? "selected" : ""}>${esc(countryName(c))}</option>`).join("")}</select>` : ""}`;
   const rows = rankedPlayers(rankSince(), state.rankCountry);
   $("rank").innerHTML = `<thead><tr><th>#</th><th>Jugador</th><th>Pts</th><th title="Partidas jugadas">PJ</th><th>Kills</th><th title="Victorias">🏆</th><th title="MVP">🌟</th></tr></thead><tbody>` +
     (rows.length ? rows.map(({ p, s }, i) => `<tr class="${p.id === state.user?.uid ? "mine" : ""}">
