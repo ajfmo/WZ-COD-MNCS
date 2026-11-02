@@ -11,10 +11,15 @@ import {
   firebaseConfig, SITE, OWNER_EMAIL, ADMIN_TZ, FALLBACK_EVENT, TEAM_SIZE, PLATFORMS, POINTS,
   COUNTRIES, ROLES, MODES, MVP_DAYS
 } from "./config.js";
+import { tr, LANG, LOCALE, setLang, startDomTranslation } from "./i18n.js";
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
+startDomTranslation();
+$("lang-toggle").textContent = LANG === "en" ? "ES" : "EN";
+$("lang-toggle").title = LANG === "en" ? "Ver en español" : "View in English";
+$("lang-toggle").addEventListener("click", () => { setLang(LANG === "en" ? "es" : "en"); location.reload(); });
 $("site-title").textContent = SITE.title;
 $("site-sub").textContent = SITE.subtitle;
 document.title = SITE.title;
@@ -70,11 +75,11 @@ const tsMs = (t) => (t?.toMillis ? t.toMillis() : t?.seconds ? t.seconds * 1000 
 const localTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
 // Todas las horas se muestran en la zona horaria de quien ve la página.
 function fmt(ms) {
-  return new Intl.DateTimeFormat("es", { weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit", hour12: true }).format(ms);
+  return new Intl.DateTimeFormat(LOCALE, { weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit", hour12: true }).format(ms);
 }
 // Para textos que se comparten (WhatsApp, anuncios): incluye la zona, p. ej. "GMT-4".
 function fmtZ(ms) {
-  return new Intl.DateTimeFormat("es", { weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit", hour12: true, timeZoneName: "short" }).format(ms);
+  return new Intl.DateTimeFormat(LOCALE, { weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit", hour12: true, timeZoneName: "short" }).format(ms);
 }
 function whenLine(ms) { return `${fmt(ms)} (tu hora)`; }
 // datetime-local se interpreta en la hora local de quien lo escribe
@@ -292,7 +297,7 @@ function nextEvent() {
 function shareLink(e) {
   const url = location.origin + location.pathname;
   const text = `🎮 ${e.title}\n🗓️ ${fmtZ(e.ms)}${e.notes ? "\n📝 " + e.notes : ""}\n👉 Regístrate, confirma y arma tu equipo: ${url}`;
-  return `https://wa.me/?text=${encodeURIComponent(text)}`;
+  return `https://wa.me/?text=${encodeURIComponent(tr(text))}`;
 }
 function eventExtras(e, { showNames = true } = {}) {
   const parts = [];
@@ -478,7 +483,7 @@ function referBlock(p, s) {
     <p class="small muted">Ganas <b>+${POINTS.referral}</b> por cada amigo que se registre con tu link y juegue su primera partida. Llevas <b>${s.referrals}</b> invitado${s.referrals === 1 ? "" : "s"}, <b>${s.recruits}</b> ya jugaron.</p>
     <div class="row"><input readonly value="${esc(link)}" style="flex:1;min-width:200px" aria-label="Tu link de invitación">
       <button class="btn sm" data-act="copy-ref">Copiar</button>
-      <a class="btn sm wa" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(`🎮 Únete a las privadas de Warzone de ${SITE.title}. Regístrate con mi link: ${link}`)}">WhatsApp</a></div>
+      <a class="btn sm wa" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(tr(`🎮 Únete a las privadas de Warzone de ${SITE.title}. Regístrate con mi link: `) + link)}">WhatsApp</a></div>
   </div>`;
 }
 function renderMyProfile() {
@@ -1273,7 +1278,7 @@ function suggCard(x, p, { home = false } = {}) {
   const mine = p && votes.includes(p.id);
   const author = state.players.get(x.uid)?.gamertag || "Alguien";
   const canDel = state.isAdmin || (p && x.uid === p.id);
-  const share = `https://wa.me/?text=${encodeURIComponent(`🗳️ ¿Jugamos ${fmtZ(x.ms)}?${x.note ? " " + x.note : ""}\nVota aquí 👉 ${suggLink(x)}`)}`;
+  const share = `https://wa.me/?text=${encodeURIComponent(tr(`🗳️ ¿Jugamos ${fmtZ(x.ms)}?`) + (x.note ? " " + x.note : "") + tr(`\nVota aquí 👉 `) + suggLink(x))}`;
   return `<div class="sugg ${x.id === focusSugg ? "focus" : ""}" data-sugg="${esc(x.id)}">
     <div class="who"><b>${esc(fmt(x.ms))}</b><small>${esc(author)}${x.note ? " · " + esc(x.note) : ""}</small>
       <span class="row sugg-share"><a class="btn sm wa" target="_blank" rel="noopener" href="${share}">Compartir</a><button class="btn sm" data-act="sugg-copy" data-id="${esc(x.id)}">Copiar link</button></span></div>
@@ -1432,7 +1437,7 @@ function setRsvp(eventId, going) {
 
 function adminInviteLink(email) {
   const text = `👋 Te hice admin de ${SITE.title}.\n1) Abre ${siteUrl()} en Chrome o Safari.\n2) Toca "Entrar" y usa EXACTAMENTE este correo: ${email}\n3) Te aparecerá la pestaña Admin.\nSi usas correo y contraseña, primero verifica tu correo.`;
-  return `https://wa.me/?text=${encodeURIComponent(text)}`;
+  return `https://wa.me/?text=${encodeURIComponent(tr(text))}`;
 }
 async function addAdmin(form) {
   const email = String(new FormData(form).get("email") || "").trim().toLowerCase();
@@ -1490,7 +1495,7 @@ document.addEventListener("change", (e) => { if (e.target.id === "rank-country")
 let toastTimer;
 function toast(msg, err = false) {
   const t = $("toast");
-  t.textContent = msg; t.className = "toast show" + (err ? " err" : "");
+  t.textContent = tr(msg); t.className = "toast show" + (err ? " err" : "");
   clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.className = "toast"), 3500);
 }
 

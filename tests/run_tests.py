@@ -104,7 +104,7 @@ def tab(page, t):
     page.evaluate(f"location.hash = '#{t}'"); page.wait_for_timeout(150)
 
 def login(page):
-    page.click("[data-act=login]")
+    page.click("#me [data-act=login]")
     page.wait_for_selector("[data-act=logout]", timeout=5000)
 
 def register(page, gamertag, aid="", country="", role="", expect_ok=True):
@@ -120,7 +120,7 @@ tomorrow = (datetime.datetime.now(datetime.UTC).replace(tzinfo=None) + datetime.
 
 with sync_playwright() as pw:
     browser = pw.chromium.launch(executable_path="/usr/bin/google-chrome", args=["--no-sandbox"])
-    ctx = browser.new_context(viewport={"width": 390, "height": 844}, timezone_id="America/Caracas")
+    ctx = browser.new_context(viewport={"width": 390, "height": 844}, timezone_id="America/Caracas", locale="es-VE")
     ctx.route("https://www.gstatic.com/firebasejs/**", lambda r: r.fulfill(path=os.path.join(MOCK, r.request.url.split("/")[-1]), content_type="text/javascript"))
     ctx.route("https://fonts.googleapis.com/**", lambda r: r.fulfill(body="", content_type="text/css"))
     ctx.route("https://fonts.gstatic.com/**", lambda r: r.abort())
@@ -403,7 +403,7 @@ with sync_playwright() as pw:
 
     # ---------- Zonas horarias ----------
     def tz_text(tzid):
-        c = browser.new_context(viewport={"width": 390, "height": 844}, timezone_id=tzid)
+        c = browser.new_context(viewport={"width": 390, "height": 844}, timezone_id=tzid, locale="es-ES")
         c.route("https://www.gstatic.com/firebasejs/**", lambda r: r.fulfill(path=os.path.join(MOCK, r.request.url.split("/")[-1]), content_type="text/javascript"))
         c.route("https://fonts.**", lambda r: r.abort())
         pg = c.new_page(); pg.goto(BASE); pg.wait_for_timeout(900)
@@ -415,7 +415,7 @@ with sync_playwright() as pw:
     check("ya no dice 'hora Venezuela'", "Venezuela" not in ve + ny + md)
 
     # ---------- Navegador dentro de Instagram ----------
-    ig = browser.new_context(user_agent="Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Instagram 300.0", viewport={"width": 390, "height": 844})
+    ig = browser.new_context(user_agent="Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Instagram 300.0", viewport={"width": 390, "height": 844}, locale="es-VE")
     ig.route("https://www.gstatic.com/firebasejs/**", lambda r: r.fulfill(path=os.path.join(MOCK, r.request.url.split("/")[-1]), content_type="text/javascript"))
     ig.route("https://fonts.**", lambda r: r.abort())
     igp = ig.new_page(); igp.goto(BASE); igp.wait_for_selector("#me h2")
@@ -453,6 +453,39 @@ with sync_playwright() as pw:
 
     # ---------- Visitante: pasos ----------
     check("visitante ve '¿cómo empiezo?'", guest.locator("#me ol.steps li").count() == 5)
+
+    # ---------- Inglés ----------
+    import re as _re
+    en = browser.new_context(viewport={"width": 390, "height": 844}, timezone_id="America/New_York", locale="en-US")
+    en.route("https://www.gstatic.com/firebasejs/**", lambda r: r.fulfill(path=os.path.join(MOCK, r.request.url.split("/")[-1]), content_type="text/javascript"))
+    en.route("https://fonts.**", lambda r: r.abort())
+    eg = en.new_page(); eg.on("pageerror", lambda e: errors.append(f"en: {e}")); eg.goto(BASE); eg.wait_for_timeout(900)
+    check("navegador en inglés carga en inglés", "Sign in to play".lower() in eg.locator("#me").inner_text().lower() and eg.locator("#lang-toggle").inner_text() == "ES")
+    eo = en.new_page(); eo.on("pageerror", lambda e: errors.append(f"en-owner: {e}"))
+    eo.add_init_script(f"sessionStorage.setItem('nextgoogle', {json.dumps(json.dumps(OWNER))})")
+    eo.goto(BASE); eo.wait_for_selector("#me h2"); eo.click("#me [data-act=login]"); eo.wait_for_selector("[data-act=logout]"); eo.wait_for_timeout(600)
+    USER = ["Privada de prueba", "Lobos", "Alpha", "BravoSix", "Adrian", "más tarde", "Hoy arrancamos puntual", "Temporada 1", "Temporada 2", "MNCS-777"]
+    ES_WORDS = _re.compile(r"[áéíóúñ¿¡]|\b(de|del|la|el|los|las|tu|tus|para|por|con|una|que|sin|ya|aún|partida|partidas|equipo|equipos|jugador|jugadores|horario|temporada|correo|perfil|puntos|borrar|guardar|crear|cerrar|votar|entra|entrar|sube|subir|ver)\b", _re.I)
+    leftovers = set()
+    for t in ["inicio", "perfil", "equipos", "calendario", "ranking", "admin"]:
+        for pg in (eg, eo):
+            pg.evaluate(f"location.hash = '#{t}'"); pg.wait_for_timeout(250)
+            txt = pg.evaluate("() => [...document.querySelectorAll('section:not([hidden]), header, nav, #announcement:not([hidden])')].map(e => e.innerText).join('\\n')")
+            for line in txt.split("\n"):
+                l = line.strip()
+                for u in USER + ["El Salvador"]: l = _re.sub(_re.escape(u), "", l, flags=_re.I)
+                if l and ES_WORDS.search(l): leftovers.add(l[:90])
+    eo.evaluate("location.hash = '#ranking'"); eo.wait_for_timeout(250)
+    eo.click(f"#rank [data-act=profile] >> nth=0"); eo.wait_for_timeout(200)
+    for line in eo.locator("#profile").inner_text().split("\n"):
+        l = line.strip()
+        for u in USER: l = l.replace(u, "")
+        if l and ES_WORDS.search(l): leftovers.add("perfil: " + l[:80])
+    check("sin textos en español en modo inglés", not leftovers, " | ".join(sorted(leftovers)[:60]))
+    eo.click("#profile [data-act=close-profile]")
+    eo.click("#lang-toggle"); eo.wait_for_timeout(800)
+    check("botón ES vuelve a español", "Próxima partida".lower() in eo.locator("#next").inner_text().lower() or "inicio" in eo.locator("nav").inner_text().lower())
+    en.close()
 
     owner.screenshot(path="/tmp/claude-0/-home-claude/6898851d-8b89-583f-adbb-0dc9105785d4/scratchpad/owner.png", full_page=True)
     pa.screenshot(path="/tmp/claude-0/-home-claude/6898851d-8b89-583f-adbb-0dc9105785d4/scratchpad/playerA.png", full_page=True)

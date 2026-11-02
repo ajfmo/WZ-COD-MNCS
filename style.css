@@ -238,3 +238,9 @@ small.ok { color: var(--ok); }
 .sugg { align-items: flex-start; }
 .sugg-share { gap: 6px; margin-top: 6px; }
 .sugg.focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(242,161,43,.35); }
+
+.lang { min-width: 44px; }
+
+#site-sub { flex: 1; min-width: 0; }
+.hero .row:first-child { flex-wrap: nowrap; }
+.lang { flex-shrink: 0; }
