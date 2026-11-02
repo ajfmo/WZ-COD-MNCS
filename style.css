@@ -244,3 +244,89 @@ small.ok { color: var(--ok); }
 #site-sub { flex: 1; min-width: 0; }
 .hero .row:first-child { flex-wrap: nowrap; }
 .lang { flex-shrink: 0; }
+
+/* ================= v10: pase de UI/UX (celular y escritorio) ================= */
+a.btn { text-decoration: none; color: var(--text); display: inline-flex; align-items: center; }
+a.btn.primary { color: var(--accent-ink); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.toast { visibility: hidden; }
+.toast.show { visibility: visible; }
+
+/* Encabezado */
+.hero { padding: 22px 0 20px; }
+.hero-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.hero-top h1 { margin: 4px 0 14px; }
+.hero-grid { display: grid; gap: 16px; }
+.stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.stat { padding: 8px 10px; min-width: 0; }
+.stat span { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.next-extras { gap: 10px; }
+.share-row, .rsvp { gap: 6px; }
+@media (min-width: 900px) {
+  .hero-grid { grid-template-columns: minmax(0, 1fr) 280px; align-items: start; gap: 40px; }
+  .hero-grid .stats { grid-template-columns: 1fr 1fr; }
+}
+/* Fuera de Inicio el encabezado se reduce a lo esencial: próxima partida y cuenta regresiva */
+body:not([data-tab="inicio"]) .hero .notes,
+body:not([data-tab="inicio"]) .hero .fmt,
+body:not([data-tab="inicio"]) .hero .next-extras,
+body:not([data-tab="inicio"]) .hero .next .team-actions,
+body:not([data-tab="inicio"]) .hero .my-squad,
+body:not([data-tab="inicio"]) .hero .stats { display: none; }
+body:not([data-tab="inicio"]) .hero-grid { grid-template-columns: 1fr; }
+body:not([data-tab="inicio"]) .hero { padding-bottom: 12px; }
+body:not([data-tab="inicio"]) .hero-top h1 { font-size: clamp(26px, 5vw, 40px); margin-bottom: 8px; }
+
+/* Filas de jugadores: nombres largos y botones nunca se salen */
+.slot { flex-wrap: wrap; }
+.slot > .who { flex: 1 1 170px; }
+.who b { white-space: normal; overflow: visible; overflow-wrap: anywhere; }
+.who small { display: block; overflow-wrap: anywhere; }
+.btns { flex-wrap: wrap; margin-left: auto; justify-content: flex-end; }
+main section > *, .my-profile > *, .card-grid > *, .events > *, .teams > *, .pool > *, .hall > * { min-width: 0; }
+
+/* Formularios */
+.grid-form { grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); }
+label > span { display: block; }
+.panel .stats, dialog .stats { grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); }
+
+/* Sugerencias */
+.sugg { display: block; }
+.sugg-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+.sugg-top .who { min-width: 0; }
+.sugg .vote { flex-shrink: 0; }
+.sugg-share { margin-top: 8px; gap: 6px; }
+
+/* Partidas */
+.event .danger-tag { display: inline-block; margin-top: 6px; }
+.admin-list li { flex-wrap: wrap; word-break: normal; }
+.admin-list li > span:first-child { flex: 1 1 200px; overflow-wrap: anywhere; }
+
+/* Navegación: iconos solo en el celular */
+.tabs .ti { display: none; width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.tabs a[hidden] { display: none; }
+
+@media (max-width: 719px) {
+  body { padding-bottom: calc(64px + env(safe-area-inset-bottom)); }
+  .tabs { position: fixed; top: auto; bottom: 0; left: 0; right: 0; border-bottom: 0; border-top: 1px solid var(--line); padding-bottom: env(safe-area-inset-bottom); z-index: 20; }
+  .tabs-inner { padding: 0; gap: 0; overflow: visible; }
+  .tabs a { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 8px 2px 7px;
+    font-family: Inter, system-ui, sans-serif; text-transform: none; letter-spacing: 0; font-size: 11px; border-bottom: 0; border-top: 2px solid transparent; }
+  .tabs a span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+  .tabs a.on { border-top-color: var(--accent); color: var(--accent); }
+  .tabs .ti { display: block; }
+  .toast { bottom: calc(76px + env(safe-area-inset-bottom)); }
+  main section { margin-top: 20px; }
+  .panel { padding: 16px; }
+  .rank th, .rank td { padding: 8px 6px; }
+  #rank td:nth-child(2) { white-space: normal; overflow-wrap: anywhere; min-width: 120px; }
+  footer { padding-bottom: 16px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition: none !important; scroll-behavior: auto !important; }
+}
+
+.events { grid-template-columns: repeat(auto-fill, minmax(min(100%, 330px), 1fr)); }
+.admin-bar { border-top: 1px solid var(--line); padding-top: 10px; margin-top: 12px; gap: 5px; }
+.admin-bar .btn { font-size: 12px; padding: 3px 9px; min-height: 28px; }
+.panel .stat span, dialog .stat span { white-space: normal; overflow: visible; }

@@ -155,7 +155,10 @@ with sync_playwright() as pw:
     d = db(owner); ev_id = list(d["events"].keys())[0]
     check("partida guardada con modo y mínimo", d["events"][ev_id]["mode"] == "Mini Royale" and d["events"][ev_id]["minPlayers"] == 4)
     check("lobby privado guardado", d["lobby"][ev_id]["code"] == "MNCS-777")
+    tab(owner, "inicio")
     check("hero muestra modo y mínimo", "Mini Royale" in owner.locator("#next").inner_text())
+    tab(owner, "admin")
+    check("fuera de Inicio el encabezado es compacto", owner.locator("#next .fmt").is_hidden() and owner.locator("#stats").is_hidden())
 
     # invitar admin (no abrir WhatsApp)
     owner.answers = [False]
@@ -243,7 +246,7 @@ with sync_playwright() as pw:
     nxt = pa.locator("#next").inner_text()
     check("3 confirmados y faltan 1 para el mínimo", "3" in nxt and "Faltan 1" in nxt, nxt[:300])
     check("registrado ve el código del lobby", "MNCS-777" in nxt)
-    guest.reload(); guest.wait_for_timeout(500)
+    guest.reload(); guest.wait_for_timeout(500); tab(guest, "inicio")
     check("visitante NO ve el código del lobby", "MNCS-777" not in guest.locator("#next").inner_text())
     check("hero muestra 'Tu escuadra'", "Tu escuadra" in pa.locator("#next").inner_text())
 
@@ -375,7 +378,7 @@ with sync_playwright() as pw:
     # ---------- Cancelar y reactivar ----------
     tab(owner, "calendario"); owner.wait_for_timeout(200)
     owner.answers = ["Lluvia de lag", True]
-    owner.click(f"[data-act=ev-cancel-event][data-id='{ev_id}']")
+    owner.click(f"#upcoming [data-act=ev-cancel-event][data-id='{ev_id}']")
     wait_toast(owner, "Partida cancelada")
     d = db(owner)
     check("partida cancelada con anuncio", d["events"][ev_id]["status"] == "cancelled" and "Cancelada" in d["settings"]["announcement"]["text"])
@@ -385,6 +388,7 @@ with sync_playwright() as pw:
     check("al reactivar se quita el anuncio de cancelación", db(owner)["settings"]["announcement"]["active"] is False and owner.locator("#announcement").is_hidden())
     tab(owner, "ranking"); owner.wait_for_timeout(200)
     check("ranking por defecto en la temporada activa", "primary" in owner.locator("#rank-controls [data-id=season]").get_attribute("class"))
+    tab(owner, "inicio")
     w = owner.evaluate("() => document.querySelector('#next .progress')?.getBoundingClientRect().width || 0")
     check("barra de progreso visible en la próxima partida", w > 100, f"width {w}")
 
@@ -418,6 +422,15 @@ with sync_playwright() as pw:
     check("Nueva York ve 6:00 p. m.", "6:00 p. m. (tu hora)" in ny, ny[:120])
     check("Madrid ve 12:00 a. m. del día siguiente", "12:00 a. m. (tu hora)" in md, md[:120])
     check("ya no dice 'hora Venezuela'", "Venezuela" not in ve + ny + md)
+
+    # ---------- Diseño en celular ----------
+    tab(owner, "equipos"); owner.wait_for_timeout(200)
+    nav = owner.evaluate("() => { const r = document.querySelector('.tabs').getBoundingClientRect(); return [Math.round(r.bottom), innerHeight, getComputedStyle(document.querySelector('.tabs')).position] }")
+    check("navegación fija abajo en el celular", nav[2] == "fixed" and abs(nav[0] - nav[1]) <= 2, str(nav))
+    for t in ["inicio", "perfil", "equipos", "calendario", "ranking", "admin"]:
+        tab(owner, t); owner.wait_for_timeout(150)
+        sw = owner.evaluate("() => document.documentElement.scrollWidth - document.documentElement.clientWidth")
+        check(f"sin scroll horizontal en {t} (celular)", sw <= 0, f"{sw}px")
 
     # ---------- Navegador dentro de Instagram ----------
     ig = browser.new_context(user_agent="Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Instagram 300.0", viewport={"width": 390, "height": 844}, locale="es-VE")

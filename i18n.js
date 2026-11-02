@@ -40,7 +40,7 @@ const DICT = [
   ["Inicio", "Home"], ["Mi perfil", "My profile"], ["Equipos", "Teams"], ["Calendario", "Calendar"], ["Ranking", "Leaderboard"], ["Admin", "Admin"],
   ["Partidas privadas de Warzone · equipos de 4", "Warzone private matches · squads of 4"],
   ["Datos en vivo · se actualiza solo", "Live data · updates automatically"],
-  ["Próxima partida", "Next match"], ["Próximas partidas", "Upcoming matches"], ["Partidas jugadas", "Played matches"],
+  ["Próxima partida", "Next match"], ["Próximas partidas", "Upcoming matches"], ["Partidas jugadas", "Matches played"], ["PJ", "GP"], ["Victorias", "Wins"], ["📅 Google", "📅 Google"], ["Agregar a Google Calendar", "Add to Google Calendar"], ["Agregar a iPhone / Outlook", "Add to iPhone / Outlook"],
   ["Partida privada", "Private match"], ["Partida", "Match"],
   ["(tu hora)", "(your time)"], ["tu hora local", "your local time"], ["(tu hora local)", "(your local time)"],
   ["¡En curso!", "Live now!"], ["No hay partidas programadas.", "No matches scheduled."], ["No hay partidas programadas", "No matches scheduled"],

@@ -152,10 +152,16 @@ function currentTab() {
 }
 function applyTab() {
   const tab = currentTab();
+  document.body.dataset.tab = tab;
   document.querySelectorAll("[data-view]").forEach((s) => (s.hidden = s.dataset.view !== tab));
   document.querySelectorAll("[data-tab]").forEach((a) => a.classList.toggle("on", a.dataset.tab === tab));
 }
-window.addEventListener("hashchange", () => { applyTab(); window.scrollTo({ top: document.querySelector(".tabs").offsetTop, behavior: "smooth" }); });
+const MOBILE = matchMedia("(max-width: 719px)");
+window.addEventListener("hashchange", () => {
+  applyTab();
+  const top = MOBILE.matches ? 0 : document.querySelector(".tabs").offsetTop;
+  window.scrollTo({ top, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+});
 
 // ---------- Puntos e insignias ----------
 // Datos derivados de todas las partidas (se recalculan cuando cambia algo)
@@ -324,8 +330,8 @@ function eventExtras(e, { showNames = true } = {}) {
       parts.push(`<div class="lobby">🔒 ${lob.code ? `Código: <b>${esc(lob.code)}</b>` : ""}${lob.code && lob.link ? " · " : ""}${lob.link ? `<a href="${esc(lob.link)}" target="_blank" rel="noopener">Abrir enlace</a>` : ""}</div>`);
     } else if (!me()) parts.push(`<p class="muted small">🔒 El código del lobby se ve al registrarte.</p>`);
   }
-  parts.push(`<div class="row"><a class="btn sm wa" href="${shareLink(e)}" target="_blank" rel="noopener">Compartir por WhatsApp</a>
-    ${e.ms > Date.now() ? `<a class="btn sm" href="${gcalLink(e)}" target="_blank" rel="noopener">📅 Google Calendar</a><button class="btn sm" data-act="ics" data-id="${esc(e.id || "")}">📅 iPhone / Outlook</button>` : ""}</div>`);
+  parts.push(`<div class="row share-row"><a class="btn sm wa" href="${shareLink(e)}" target="_blank" rel="noopener" title="Compartir por WhatsApp">WhatsApp</a>
+    ${e.ms > Date.now() ? `<a class="btn sm" href="${gcalLink(e)}" target="_blank" rel="noopener" title="Agregar a Google Calendar">📅 Google</a><button class="btn sm" data-act="ics" data-id="${esc(e.id || "")}" title="Agregar a iPhone / Outlook">📅 iPhone / Outlook</button>` : ""}</div>`);
   return parts.join("");
 }
 const icsDate = (ms) => new Date(ms).toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
@@ -575,7 +581,7 @@ function renderRanking() {
       <button class="btn sm ${mode === "all" ? "primary" : ""}" data-act="rank-mode" data-id="all">Histórico</button></div>` : ""}
     ${used.length ? `<select id="rank-country" style="width:auto"><option value="">🌎 Todos los países</option>${used.map((c) => `<option value="${c}" ${state.rankCountry === c ? "selected" : ""}>${flag(c)} ${esc(countryName(c))}</option>`).join("")}</select>` : ""}`;
   const rows = rankedPlayers(rankSince(), state.rankCountry);
-  $("rank").innerHTML = `<thead><tr><th>#</th><th>Jugador</th><th>Pts</th><th>Partidas</th><th>Kills</th><th>🏆</th><th>🌟</th></tr></thead><tbody>` +
+  $("rank").innerHTML = `<thead><tr><th>#</th><th>Jugador</th><th>Pts</th><th title="Partidas jugadas">PJ</th><th>Kills</th><th title="Victorias">🏆</th><th title="MVP">🌟</th></tr></thead><tbody>` +
     (rows.length ? rows.map(({ p, s }, i) => `<tr class="${p.id === state.user?.uid ? "mine" : ""}">
       <td>${i + 1}</td><td>${flag(p.country)} ${nameBtn(p.id, p.gamertag)}</td><td><b>${s.points}</b></td><td>${s.games}</td><td>${s.kills}</td><td>${s.wins}</td><td>${s.mvps}</td></tr>`).join("")
       : `<tr><td colspan="7" class="muted">Aún no hay jugadores.</td></tr>`) + `</tbody>`;
@@ -590,7 +596,7 @@ function renderTeams() {
   $("teams-count").textContent = list.length ? `${list.length} equipos` : "";
   const ev = nextEvent();
   $("teams-for").innerHTML = ev
-    ? `Equipos para <b>${esc(ev.title)}</b> · ${esc(fmt(ev.ms))}. Al terminar la partida, un admin la cierra: se guarda la alineación y todos vuelven al pool para rearmar.${state.isAdmin && ev.id ? ` <button class="btn sm" data-act="ev-close" data-id="${ev.id}">Cerrar partida y liberar equipos</button>` : ""}`
+    ? `Equipos para <b>${esc(ev.title)}</b> (${esc(fmt(ev.ms))}). Al terminar la partida, un admin la cierra: se guarda la alineación y todos vuelven al pool para rearmar.${state.isAdmin && ev.id ? ` <button class="btn sm" data-act="ev-close" data-id="${ev.id}">Cerrar partida y liberar equipos</button>` : ""}`
     : `Los equipos se arman para cada partida.`;
   if (!state.loaded.teams) { $("teams").innerHTML = `<p class="muted">Cargando…</p>`; return; }
   if (!list.length) { $("teams").innerHTML = `<div class="empty-note">Aún no hay equipos. ¡Crea el primero!</div>`; return; }
@@ -677,7 +683,7 @@ function renderCalendar() {
   const all = [...state.events.values()].map((e) => ({ ...e, ms: tsMs(e.startsAt) }));
   const up = all.filter((e) => e.ms > now - 3 * 3600e3).sort((a, b) => a.ms - b.ms);
   const past = all.filter((e) => e.ms <= now - 3 * 3600e3).sort((a, b) => b.ms - a.ms);
-  const adminBtns = (e) => state.isAdmin ? `<div class="team-actions">
+  const adminBtns = (e) => state.isAdmin ? `<div class="team-actions admin-bar">
       <button class="btn sm" data-act="ev-edit" data-id="${e.id}">Editar</button>
       ${e.status === "cancelled"
         ? `<button class="btn sm" data-act="ev-restore" data-id="${e.id}">Reactivar</button>`
@@ -695,7 +701,8 @@ function renderCalendar() {
     const cancelled = e.status === "cancelled";
     return `<article class="event ${cancelled ? "cancelled" : ""}">
       <p class="ev-when">${esc(whenLine(e.ms))}</p>
-      <h3>${cancelled ? `<span class="tag danger-tag">Cancelada</span> ` : ""}${esc(e.title)}</h3>
+      ${cancelled ? `<span class="tag danger-tag">Cancelada</span>` : ""}
+      <h3>${esc(e.title)}</h3>
       ${cancelled && e.cancelReason ? `<p class="small">Motivo: ${esc(e.cancelReason)}</p>` : ""}
       ${formatLine(e)}
       ${e.notes ? `<p class="muted small">${esc(e.notes)}</p>` : ""}
@@ -899,7 +906,9 @@ function renderResultsForm(eventId) {
   for (const [tid, t] of Object.entries(r.teams || {})) {
     teams.push({ id: tid, name: state.teams.has(tid) ? t.name : t.name + " (disuelto)", members: savedMembers(tid) });
   }
-  for (const t of state.teams.values()) if (!r.teams?.[t.id]) teams.push(t);
+  const evMs = tsMs(state.events.get(eventId)?.startsAt);
+  const isPast = evMs && evMs < Date.now() - 3 * 3600e3;
+  if (!state.results.has(eventId) || !isPast) for (const t of state.teams.values()) if (!r.teams?.[t.id]) teams.push(t);
   if (!teams.length) { box.innerHTML = `<p class="muted">No hay equipos registrados.</p>`; return; }
   box.innerHTML = `${!state.results.has(eventId) && rs?.size ? `<p class="muted small">Asistencia precargada según quién confirmó "Voy".</p>` : ""}<form data-form="results" data-event="${eventId}">
     ${teams.map((t) => {
@@ -1292,13 +1301,13 @@ function suggCard(x, p, { home = false } = {}) {
   const canDel = state.isAdmin || (p && x.uid === p.id);
   const share = `https://wa.me/?text=${encodeURIComponent(tr(`🗳️ ¿Jugamos ${fmtZ(x.ms)}?`) + (x.note ? " " + x.note : "") + tr(`\nVota aquí 👉 `) + suggLink(x))}`;
   return `<div class="sugg ${x.id === focusSugg ? "focus" : ""}" data-sugg="${esc(x.id)}">
-    <div class="who"><b>${esc(fmt(x.ms))}</b><small>${esc(author)}${x.note ? " · " + esc(x.note) : ""}</small>
-      <span class="row sugg-share"><a class="btn sm wa" target="_blank" rel="noopener" href="${share}">Compartir</a><button class="btn sm" data-act="sugg-copy" data-id="${esc(x.id)}">Copiar link</button></span></div>
-    <span class="btns">
-      <button class="btn sm ${mine ? "primary" : ""}" ${p ? "" : "disabled"} data-act="vote" data-id="${x.id}" title="${p ? (mine ? "Quitar mi voto" : "Votar") : "Entra para votar"}">👍 ${votes.length}</button>
+    <div class="sugg-top">
+      <div class="who"><b>${esc(fmt(x.ms))}</b><small>${esc(author)}${x.note ? " · " + esc(x.note) : ""}</small></div>
+      <button class="btn sm vote ${mine ? "primary" : ""}" ${p ? "" : "disabled"} data-act="vote" data-id="${x.id}" title="${p ? (mine ? "Quitar mi voto" : "Votar") : "Entra para votar"}">👍 ${votes.length}</button>
+    </div>
+    <div class="row sugg-share"><a class="btn sm wa" target="_blank" rel="noopener" href="${share}">Compartir</a><button class="btn sm" data-act="sugg-copy" data-id="${esc(x.id)}">Copiar link</button>
       ${!home && state.isAdmin ? `<button class="btn sm" data-act="sugg-schedule" data-id="${x.id}">Agendar</button>` : ""}
-      ${!home && canDel ? `<button class="btn sm danger" data-act="sugg-del" data-id="${x.id}" title="Borrar">✕</button>` : ""}
-    </span>
+      ${!home && canDel ? `<button class="btn sm danger" data-act="sugg-del" data-id="${x.id}" title="Borrar">✕</button>` : ""}</div>
   </div>`;
 }
 async function copySuggLink(id) {
@@ -1508,7 +1517,7 @@ let toastTimer;
 function toast(msg, err = false) {
   const t = $("toast");
   t.textContent = tr(msg); t.className = "toast show" + (err ? " err" : "");
-  clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.className = "toast"), 3500);
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.className = "toast"), 4000);
 }
 
 applyTab();
