@@ -637,6 +637,17 @@ function renderTeams() {
   }).join("");
 }
 
+function poolWaBtn(p, team) {
+  const ev = nextEvent(), mine = me();
+  const when = ev ? ` (${fmtZ(ev.ms)})` : "";
+  const link = `${siteUrl()}?ref=${refCodeOf(mine.id)}`;
+  const msg = team
+    ? tr(`🎮 ${p.gamertag}, te invito a mi equipo "${team.name}" para la próxima partida${when}. Entra y toca "Unirme": `) + link
+    : tr(`🎮 ${p.gamertag}, ¡únete a la próxima partida${when}! Arma equipo aquí: `) + link;
+  const invited = team && reqFor(team.id, p.id);
+  return `<a class="btn sm wa" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(msg)}"
+    ${team && !invited ? `data-act="req-invite-wa" data-uid="${p.id}"` : ""} title="Invitar por WhatsApp">WhatsApp</a>`;
+}
 function renderPool() {
   $("auto-wrap").innerHTML = state.isAdmin ? `<button class="btn sm" data-act="auto-build" style="margin:4px 0 8px">⚙️ Armar equipos con el pool</button>` : "";
   const pool = [...state.players.values()].filter((p) => !p.teamId).sort((a, b) => tsMs(a.createdAt) - tsMs(b.createdAt));
@@ -647,6 +658,7 @@ function renderPool() {
   const canInvite = t && t.captainUid === state.user?.uid && (t.members || []).length < TEAM_SIZE;
   $("pool").innerHTML = pool.map((p) => {
     let btns = "";
+    if (me() && p.id !== state.user.uid) btns += poolWaBtn(p, canInvite ? t : null);
     if (canInvite) {
       const r = reqFor(t.id, p.id);
       if (!r) btns += `<button class="btn sm primary" data-act="req-invite" data-uid="${p.id}">Invitar</button>`;
@@ -1470,7 +1482,7 @@ document.addEventListener("click", (e) => {
     rsvp: () => setRsvp(id, b.dataset.going === "1"),
     "ev-cancel-event": () => cancelEvent(id), "ev-restore": () => restoreEvent(id), "ev-fallback": fallbackToForm,
     "ann-clear": clearAnnouncement,
-    "req-send": () => sendRequest(team), "req-invite": () => sendInvite(uid), "req-delete": () => deleteReq(id), "req-accept": () => acceptReq(id),
+    "req-send": () => sendRequest(team), "req-invite": () => sendInvite(uid), "req-invite-wa": () => sendInvite(uid), "req-delete": () => deleteReq(id), "req-accept": () => acceptReq(id),
     "admin-assign": () => adminAssign(uid), "auto-build": autoBuild,
     "copy-link": copyLink, "ev-close": () => closeEvent(id),
     vote: () => vote(id), "sugg-copy": () => copySuggLink(id), "sugg-del": () => deleteSuggestion(id), "sugg-schedule": () => scheduleSuggestion(id),

@@ -28,6 +28,8 @@ const PATTERNS = [
   [/(\d+) = al azar/g, "$1 = random"],
   [/(\d+) = equilibrados por puntos/g, "$1 = balanced by points"],
   [/Llevas /g, "So far: "],
+  [/🎮 (.+?), te invito a mi equipo "(.+?)" para la próxima partida(.*?)\. Entra y toca "Unirme": /g, '🎮 $1, I\'m inviting you to my team "$2" for the next match$3. Sign in and tap "Join": '],
+  [/🎮 (.+?), ¡únete a la próxima partida(.*?)! Arma equipo aquí: /g, "🎮 $1, join the next match$2! Build a team here: "],
   [/(\d+) ya jugaron/g, "$1 already played"],
   [/\((\d+) invitados?, (\d+) ya jugaron\)/g, "($1 invited, $2 already played)"]
 ];
@@ -105,7 +107,7 @@ const DICT = [
   ["📨 Invitados:", "📨 Invited:"], ["(cancelar)", "(cancel)"], ["Número de escuadra para elegir en la privada", "Squad number to pick in the private match"],
   ["Pool de agentes libres", "Free agent pool"], ["Jugadores sin equipo. Los capitanes con plazas libres pueden invitarlos.", "Players without a team. Captains with open slots can invite them."],
   ["⚙️ Armar equipos con el pool", "⚙️ Build teams from the pool"], ["Nadie en el pool ahora mismo.", "Nobody in the pool right now."],
-  ["Invitar", "Invite"], ["Invitado ✓", "Invited ✓"], ["Cancelar invitación", "Cancel invite"], ["Aceptar solicitud", "Accept request"],
+  ["Invitar", "Invite"], ["Invitar por WhatsApp", "Invite on WhatsApp"], ["Invitado ✓", "Invited ✓"], ["Cancelar invitación", "Cancel invite"], ["Aceptar solicitud", "Accept request"],
   ["Asignar a un equipo", "Assign to a team"], ["Borrar jugador", "Delete player"], ["Tu escuadra en la privada:", "Your squad in the private match:"],
   ["📷 Subir marcador", "📷 Upload scoreboard"], ["(jugador eliminado)", "(deleted player)"],
   // Partidas

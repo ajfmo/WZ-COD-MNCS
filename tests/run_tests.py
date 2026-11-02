@@ -218,7 +218,12 @@ with sync_playwright() as pw:
     pc = mkpage(ctx, PC, name="C")
     login(pc); register(pc, "Charlie", "", "MX")
     tab(pa, "equipos"); pa.wait_for_timeout(300)
-    pa.click(f"#pool [data-act=req-invite][data-uid='{PC['uid']}']")
+    wa = pa.locator(f"#pool a.wa[data-uid='{PC['uid']}']")
+    href = wa.get_attribute("href") or ""
+    check("WhatsApp del pool invita al equipo con link", "Lobos" in __import__("urllib.parse").parse.unquote(href) and "ref%3D" in href)
+    with ctx.expect_page() as popup:
+        wa.click()
+    popup.value.close()
     wait_toast(pa, "Invitación enviada")
     try: pc.wait_for_function("() => document.getElementById('me').innerText.toLowerCase().includes('te invitaron')", timeout=4000)
     except Exception: pass
